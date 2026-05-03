@@ -1,0 +1,135 @@
+video-loan-system/
+│
+├── 📄 README.md                          # Main documentation
+├── 📄 DEVELOPMENT.md                    # Development guide
+├── 📄 SETUP_SUMMARY.md                  # Setup summary
+├── 📄 API.md                            # API reference
+├── 📋 package.json                      # Root monorepo config
+├── 🐳 docker-compose.yml                # Docker orchestration
+├── 📝 .env.example                      # Environment template
+├── 🔒 .gitignore                        # Git ignore rules
+├── 📜 setup.sh                          # Linux/Mac setup
+├── 📜 setup.bat                         # Windows setup
+├── 📜 quick-start.sh                    # Quick start script
+├── 📜 deploy-k8s.sh                     # Kubernetes deployment
+├── ⚙️ tsconfig.json                     # TypeScript config
+├── 📋 eslint.config.js                  # ESLint config
+├── 📋 .eslintrc.json                    # ESLint rules
+├── 📋 .prettierrc.json                  # Prettier config
+│
+├── 📁 services/                         # Microservices
+│   │
+│   ├── 📁 api-gateway/
+│   │   ├── package.json
+│   │   ├── Dockerfile
+│   │   ├── tsconfig.json
+│   │   └── 📁 src/
+│   │       └── index.ts                 # Express server
+│   │
+│   ├── 📁 session-service/
+│   │   ├── package.json
+│   │   ├── Dockerfile
+│   │   └── 📁 src/
+│   │       └── index.ts                 # WebSocket/Socket.io
+│   │
+│   ├── 📁 media-service/
+│   │   ├── package.json
+│   │   ├── Dockerfile
+│   │   └── 📁 src/
+│   │       └── index.ts                 # S3 & media handling
+│   │
+│   ├── 📁 stt-service/
+│   │   ├── package.json
+│   │   ├── Dockerfile
+│   │   └── 📁 src/
+│   │       └── index.ts                 # Speech-to-text
+│   │
+│   ├── 📁 kyc-service/
+│   │   ├── package.json
+│   │   ├── Dockerfile
+│   │   └── 📁 src/
+│   │       └── index.ts                 # KYC verification
+│   │
+│   ├── 📁 risk-service/
+│   │   ├── requirements.txt              # Python dependencies
+│   │   ├── Dockerfile
+│   │   └── 📁 src/
+│   │       └── main.py                  # FastAPI server
+│   │
+│   ├── 📁 vision-service/
+│   │   ├── requirements.txt
+│   │   ├── Dockerfile
+│   │   └── 📁 src/
+│   │       └── main.py                  # Age estimation
+│   │
+│   ├── 📁 llm-service/
+│   │   ├── requirements.txt
+│   │   ├── Dockerfile
+│   │   └── 📁 src/
+│   │       └── main.py                  # LLM analysis
+│   │
+│   ├── 📁 offer-service/
+│   │   ├── package.json
+│   │   ├── Dockerfile
+│   │   └── 📁 src/
+│   │       └── index.ts                 # Offer generation
+│   │
+│   └── 📁 audit-service/
+│       ├── package.json
+│       ├── Dockerfile
+│       └── 📁 src/
+│           └── index.ts                 # Audit logging
+│
+├── 📁 shared/                           # Shared code
+│   ├── package.json
+│   ├── tsconfig.json
+│   ├── index.ts
+│   │
+│   ├── 📁 models/
+│   │   ├── types.ts                     # Shared type definitions
+│   │   └── .gitkeep
+│   │
+│   ├── 📁 queues/
+│   │   └── jobDefinitions.ts            # Job queue types
+│   │
+│   └── 📁 utils/
+│       └── helpers.ts                   # Common utilities
+│
+├── 📁 frontend/                         # React Application
+│   ├── package.json
+│   ├── vite.config.ts
+│   ├── tsconfig.json
+│   ├── Dockerfile
+│   │
+│   ├── 📁 src/
+│   │   ├── main.tsx                     # Entry point
+│   │   ├── App.tsx                      # Main app
+│   │   ├── index.css                    # Global styles
+│   │   │
+│   │   ├── 📁 components/
+│   │   │   └── VideoCall.tsx            # Video component
+│   │   │
+│   │   └── 📁 pages/
+│   │       ├── OnboardingFlow.tsx       # Onboarding page
+│   │       └── LoanOffers.tsx           # Offers page
+│   │
+│   └── 📁 public/
+│       └── index.html                   # HTML template
+│
+└── 📁 config/                           # Configuration
+    ├── README.md                        # Config guide
+    └── prisma.schema                    # Database schema
+        
+═══════════════════════════════════════════════════════════════
+
+📊 Statistics:
+   • 10 Microservices (7 Node.js + 3 Python)
+   • 1 React Frontend
+   • 1 Shared Library
+   • 3 Databases (PostgreSQL, MongoDB, Redis)
+   • Docker Compose Orchestration
+   • Complete Documentation
+   • ~50+ files created
+   • ~2000+ lines of code scaffolded
+
+🚀 Ready to start? Run: npm install && docker-compose up -d

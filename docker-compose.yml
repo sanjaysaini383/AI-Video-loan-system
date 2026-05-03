@@ -1,0 +1,249 @@
+version: '3.8'
+
+services:
+  # Databases
+  postgres:
+    image: postgres:15-alpine
+    container_name: video-loan-postgres
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: video_loan_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  mongo:
+    image: mongo:7.0
+    container_name: video-loan-mongo
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: admin
+      MONGO_INITDB_ROOT_PASSWORD: password
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
+    healthcheck:
+      test: echo 'db.runCommand("ping").ok' | mongosh localhost:27017/test --quiet
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: video-loan-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Node.js Services
+  api-gateway:
+    build:
+      context: ./services/api-gateway
+      dockerfile: Dockerfile
+    container_name: video-loan-api-gateway
+    environment:
+      NODE_ENV: development
+      DATABASE_URL: postgresql://postgres:password@postgres:5432/video_loan_db
+      MONGODB_URI: mongodb://admin:password@mongo:27017/video_loan_system
+      REDIS_URL: redis://redis:6379
+      API_GATEWAY_PORT: 3000
+    ports:
+      - "3000:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./services/api-gateway/src:/app/src
+    command: npm run dev
+
+  session-service:
+    build:
+      context: ./services/session-service
+      dockerfile: Dockerfile
+    container_name: video-loan-session-service
+    environment:
+      NODE_ENV: development
+      REDIS_URL: redis://redis:6379
+      SESSION_SERVICE_PORT: 3001
+    ports:
+      - "3001:3001"
+    depends_on:
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./services/session-service/src:/app/src
+    command: npm run dev
+
+  media-service:
+    build:
+      context: ./services/media-service
+      dockerfile: Dockerfile
+    container_name: video-loan-media-service
+    environment:
+      NODE_ENV: development
+      REDIS_URL: redis://redis:6379
+      MEDIA_SERVICE_PORT: 3002
+      AWS_S3_BUCKET: video-loan-recordings
+    ports:
+      - "3002:3002"
+    depends_on:
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./services/media-service/src:/app/src
+    command: npm run dev
+
+  stt-service:
+    build:
+      context: ./services/stt-service
+      dockerfile: Dockerfile
+    container_name: video-loan-stt-service
+    environment:
+      NODE_ENV: development
+      REDIS_URL: redis://redis:6379
+      STT_SERVICE_PORT: 3003
+    ports:
+      - "3003:3003"
+    depends_on:
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./services/stt-service/src:/app/src
+    command: npm run dev
+
+  kyc-service:
+    build:
+      context: ./services/kyc-service
+      dockerfile: Dockerfile
+    container_name: video-loan-kyc-service
+    environment:
+      NODE_ENV: development
+      DATABASE_URL: postgresql://postgres:password@postgres:5432/video_loan_db
+      REDIS_URL: redis://redis:6379
+      KYC_SERVICE_PORT: 3004
+    ports:
+      - "3004:3004"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./services/kyc-service/src:/app/src
+    command: npm run dev
+
+  risk-service:
+    build:
+      context: ./services/risk-service
+      dockerfile: Dockerfile
+    container_name: video-loan-risk-service
+    environment:
+      PYTHONUNBUFFERED: 1
+      DATABASE_URL: postgresql://postgres:password@postgres:5432/video_loan_db
+      REDIS_URL: redis://redis:6379
+      RISK_SERVICE_PORT: 3005
+    ports:
+      - "3005:3005"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./services/risk-service/src:/app/src
+    command: uvicorn src.main:app --host 0.0.0.0 --port 3005 --reload
+
+  vision-service:
+    build:
+      context: ./services/vision-service
+      dockerfile: Dockerfile
+    container_name: video-loan-vision-service
+    environment:
+      PYTHONUNBUFFERED: 1
+      VISION_SERVICE_PORT: 3006
+      AWS_REGION: us-east-1
+    ports:
+      - "3006:3006"
+    volumes:
+      - ./services/vision-service/src:/app/src
+    command: uvicorn src.main:app --host 0.0.0.0 --port 3006 --reload
+
+  llm-service:
+    build:
+      context: ./services/llm-service
+      dockerfile: Dockerfile
+    container_name: video-loan-llm-service
+    environment:
+      PYTHONUNBUFFERED: 1
+      LLM_SERVICE_PORT: 3007
+    ports:
+      - "3007:3007"
+    volumes:
+      - ./services/llm-service/src:/app/src
+    command: uvicorn src.main:app --host 0.0.0.0 --port 3007 --reload
+
+  offer-service:
+    build:
+      context: ./services/offer-service
+      dockerfile: Dockerfile
+    container_name: video-loan-offer-service
+    environment:
+      NODE_ENV: development
+      DATABASE_URL: postgresql://postgres:password@postgres:5432/video_loan_db
+      REDIS_URL: redis://redis:6379
+      OFFER_SERVICE_PORT: 3008
+    ports:
+      - "3008:3008"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./services/offer-service/src:/app/src
+    command: npm run dev
+
+  audit-service:
+    build:
+      context: ./services/audit-service
+      dockerfile: Dockerfile
+    container_name: video-loan-audit-service
+    environment:
+      NODE_ENV: development
+      MONGODB_URI: mongodb://admin:password@mongo:27017/video_loan_system
+      REDIS_URL: redis://redis:6379
+      AUDIT_SERVICE_PORT: 3009
+    ports:
+      - "3009:3009"
+    depends_on:
+      mongo:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./services/audit-service/src:/app/src
+    command: npm run dev
+
+volumes:
+  postgres_data:
+  mongo_data:
+  redis_data:
+
+networks:
+  default:
+    name: video-loan-network

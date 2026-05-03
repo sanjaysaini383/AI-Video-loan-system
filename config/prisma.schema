@@ -1,0 +1,199 @@
+// Prisma Schema for PostgreSQL
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id                  String    @id @default(cuid())
+  phoneNumber         String    @unique
+  email               String?   @unique
+  firstName           String?
+  lastName            String?
+  dateOfBirth         DateTime?
+  gender              String?
+  profilePicUrl       String?
+  
+  // KYC Information
+  kycStatus           String    @default("pending") // pending, approved, rejected
+  kycVerifiedAt       DateTime?
+  panNumber           String?   @unique
+  aadhaarNumber       String?   @unique
+  geoVerified         Boolean   @default(false)
+  
+  // Financial Info
+  employmentStatus    String?
+  employmentType      String?
+  monthlyIncome       Float?
+  loanPurpose         String?
+  
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+  
+  sessions            VideoSession[]
+  applications        LoanApplication[]
+  offers              LoanOffer[]
+  consents            ConsentRecord[]
+}
+
+model VideoSession {
+  id                  String    @id @default(cuid())
+  userId              String
+  user                User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  campaignId          String?
+  
+  // Session Metadata
+  status              String    @default("active") // active, completed, failed
+  startedAt           DateTime  @default(now())
+  endedAt             DateTime?
+  duration            Int? // seconds
+  
+  // Location Data
+  latitude            Float?
+  longitude           Float?
+  locationAccuracy    Float?
+  locationTimestamp   DateTime?
+  
+  // Device Info
+  userAgent           String?
+  ipAddress           String?
+  platform            String?
+  
+  // Video & Audio
+  videoUrl            String?
+  audioUrl            String?
+  videoS3Key          String?
+  
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+  
+  transcripts         STTTranscript[]
+  ageEstimations      AgeEstimation[]
+  riskAssessments     RiskAssessment[]
+  kycVerifications    KYCVerification[]
+  offers              LoanOffer[]
+  auditLogs           AuditLog[]
+  consents            ConsentRecord[]
+}
+
+model STTTranscript {
+  id                  String    @id @default(cuid())
+  sessionId           String
+  session             VideoSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  
+  fullText            String
+  confidence          Float
+  language            String    @default("en")
+  duration            Int? // seconds
+  
+  createdAt           DateTime  @default(now())
+  
+  llmAnalyses         LLMAnalysis[]
+}
+
+model AgeEstimation {
+  id                  String    @id @default(cuid())
+  sessionId           String
+  session             VideoSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  
+  estimatedAge        Int
+  confidence          Float
+  faceCount           Int
+  livenessScore       Float
+  
+  createdAt           DateTime  @default(now())
+}
+
+model RiskAssessment {
+  id                  String    @id @default(cuid())
+  sessionId           String
+  session             VideoSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  
+  riskBand            String    // low, medium, high
+  riskScore           Float
+  propensityScore     Float?
+  fraudIndicators     String[] @default([])
+  
+  createdAt           DateTime  @default(now())
+}
+
+model KYCVerification {
+  id                  String    @id @default(cuid())
+  sessionId           String
+  session             VideoSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  
+  verificationType    String // pan, aadhaar, passport, etc
+  status              String    @default("pending")
+  verificationUrl     String?
+  verificationResult  String?
+  
+  createdAt           DateTime  @default(now())
+  verifiedAt          DateTime?
+}
+
+model LoanApplication {
+  id                  String    @id @default(cuid())
+  userId              String
+  user                User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  loanAmount          Float
+  tenure              Int // months
+  purpose             String?
+  status              String    @default("pending")
+  
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+}
+
+model LoanOffer {
+  id                  String    @id @default(cuid())
+  sessionId           String
+  session             VideoSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  userId              String
+  user                User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  loanAmount          Float
+  tenureMonths        Int
+  interestRate        Float
+  emi                 Float
+  eligibilityStatus   String    @default("pending") // approved, conditional, rejected
+  conditions          String[]  @default([])
+  
+  generatedAt         DateTime  @default(now())
+  expiresAt           DateTime
+  acceptedAt          DateTime?
+  
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+}
+
+model ConsentRecord {
+  id                  String    @id @default(cuid())
+  sessionId           String
+  session             VideoSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  userId              String
+  user                User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  consentType         String
+  verballyAgreed      Boolean   @default(false)
+  recorded            Boolean   @default(false)
+  audioUrl            String?
+  
+  createdAt           DateTime  @default(now())
+}
+
+model AuditLog {
+  id                  String    @id @default(cuid())
+  sessionId           String
+  session             VideoSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  
+  action              String
+  details             Json?
+  source              String
+  
+  createdAt           DateTime  @default(now())
+}
