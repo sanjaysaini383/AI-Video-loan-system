@@ -135,9 +135,40 @@ REDIS_URL=redis://localhost:6379
 AWS_REGION=us-east-1
 AWS_S3_BUCKET=video-loan-recordings
 
-# APIs
-OPENAI_API_KEY=sk-...
-ANTHROPIC_API_KEY=sk-ant-...
+# LLM Provider - Choose One (see LLM_PROVIDERS_GUIDE.md)
+LLM_PROVIDER=groq              # Options: groq, ollama, openai, gemini, anthropic
+GROQ_API_KEY=gsk-...          # Best rate limits (30 req/min), recommended for dev
+
+# Optional: Other LLM providers
+# OPENAI_API_KEY=sk-...
+# ANTHROPIC_API_KEY=sk-ant-...
+# GEMINI_API_KEY=...
+# LOCAL_LLM_URL=http://localhost:11434  # For Ollama
+```
+
+For detailed LLM provider options and setup, see [**LLM_PROVIDERS_GUIDE.md**](./LLM_PROVIDERS_GUIDE.md)
+
+### ⭐ Quick LLM Setup
+
+**Option 1: Groq (RECOMMENDED - 30 req/min)**
+```bash
+# 1. Get API key from https://console.groq.com/keys
+# 2. Add to .env:
+LLM_PROVIDER=groq
+GROQ_API_KEY=your_key_here
+# 3. Restart: docker-compose restart llm-service
+```
+
+**Option 2: Ollama (Unlimited, Local)**
+```bash
+# 1. Install: https://ollama.ai
+# 2. Run: ollama run mistral
+# 3. Add to .env:
+LLM_PROVIDER=ollama
+LOCAL_LLM_URL=http://localhost:11434
+```
+
+**Option 3: Other Providers** - See [LLM_PROVIDERS_GUIDE.md](./LLM_PROVIDERS_GUIDE.md)
 DEEPGRAM_API_KEY=...
 
 # Authentication
