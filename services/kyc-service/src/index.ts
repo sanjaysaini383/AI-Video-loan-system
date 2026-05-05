@@ -1,80 +1,181 @@
 import express from 'express';
-import Queue from 'bull';
 import dotenv from 'dotenv';
-import { PrismaClient } from '@prisma/client';
 
 dotenv.config();
 
 const app = express();
 const PORT = process.env.KYC_SERVICE_PORT || 3004;
-const prisma = new PrismaClient();
+app.use(express.json());
 
-// Job queue for KYC verification
-const kycQueue = new Queue('kyc-jobs', process.env.REDIS_URL);
+// In-memory storage for KYC records
+const kycRecords: Record<string, any> = {};
+const consentRecords: Record<string, any[]> = {};
 
-// Submit KYC verification job
-app.post('/verify', express.json(), async (req, res) => {
-  const { sessionId, userId, documentType, documentUrl } = req.body;
+// Configurable geofence (India bounding box by default)
+const GEOFENCE = {
+  minLat: parseFloat(process.env.GEO_MIN_LAT || '6.0'),
+  maxLat: parseFloat(process.env.GEO_MAX_LAT || '37.0'),
+  minLng: parseFloat(process.env.GEO_MIN_LNG || '68.0'),
+  maxLng: parseFloat(process.env.GEO_MAX_LNG || '97.5'),
+  country: 'India',
+};
 
-  try {
-    const job = await kycQueue.add(
-      { sessionId, userId, documentType, documentUrl },
-      { attempts: 3, backoff: 'exponential' }
-    );
+// ===========================
+// KYC VERIFICATION
+// ===========================
+app.post('/verify', async (req, res) => {
+  const { sessionId, userId, documentType, documentData } = req.body;
 
-    res.json({ jobId: job.id, message: 'KYC verification job queued' });
-  } catch (error) {
-    console.error('Error queuing KYC job:', error);
-    res.status(500).json({ error: 'Failed to queue verification' });
-  }
-});
+  console.log(`🔍 KYC verification for session ${sessionId}, type: ${documentType}`);
 
-// Get geo-location and validate
-app.post('/validate-location', express.json(), async (req, res) => {
-  const { latitude, longitude, sessionId } = req.body;
-
-  try {
-    // TODO: Implement geofence validation and fraud detection
-    res.json({
-      valid: true,
-      riskLevel: 'low',
-      message: 'Location validated',
-    });
-  } catch (error) {
-    res.status(500).json({ error: 'Location validation failed' });
-  }
-});
-
-// Process KYC jobs
-kycQueue.process(async (job) => {
-  const { sessionId, userId, documentType } = job.data;
-
-  console.log(`Processing KYC verification for ${userId}`);
-
-  // TODO: Integrate with document verification APIs
-  const result = {
+  // Simulate document verification
+  const verificationResult = {
+    id: `kyc_${Date.now()}`,
     sessionId,
     userId,
-    documentType,
+    documentType: documentType || 'aadhaar',
     status: 'verified',
-    confidence: 0.98,
+    confidence: 0.95 + Math.random() * 0.04,
+    verifiedAt: new Date().toISOString(),
+    details: {
+      nameMatch: true,
+      documentValid: true,
+      expiryValid: true,
+    },
   };
 
-  // Save to database
-  await prisma.kYCVerification.create({
-    data: {
-      sessionId,
-      verificationType: documentType,
-      status: 'completed',
-      verificationResult: JSON.stringify(result),
-    },
-  });
+  kycRecords[sessionId] = kycRecords[sessionId] || [];
+  kycRecords[sessionId].push(verificationResult);
 
-  return result;
+  res.json(verificationResult);
 });
 
-app.get('/health', (req, res) => {
-  res.json({ status: 'KYC Service is running' });
+// ===========================
+// GEO-LOCATION VALIDATION
+// ===========================
+app.post('/validate-location', (req, res) => {
+  const { latitude, longitude, sessionId, declaredCity } = req.body;
+
+  console.log(`📍 Location validation for session ${sessionId}: ${latitude}, ${longitude}`);
+
+  const isWithinGeofence =
+    latitude >= GEOFENCE.minLat && latitude <= GEOFENCE.maxLat &&
+    longitude >= GEOFENCE.minLng && longitude <= GEOFENCE.maxLng;
+
+  // Location risk assessment
+  let riskLevel = 'low';
+  const fraudSignals: string[] = [];
+
+  if (!isWithinGeofence) {
+    riskLevel = 'high';
+    fraudSignals.push('Location outside service geofence');
+  }
+
+  // Check if location matches declared city (simplified)
+  if (declaredCity && !isWithinGeofence) {
+    fraudSignals.push('Location mismatch with declared city');
+    riskLevel = 'high';
+  }
+
+  // VPN/proxy detection heuristic
+  if (latitude === 0 && longitude === 0) {
+    fraudSignals.push('Invalid coordinates - possible spoofing');
+    riskLevel = 'high';
+  }
+
+  res.json({
+    sessionId,
+    valid: isWithinGeofence,
+    riskLevel,
+    fraudSignals,
+    geofence: GEOFENCE.country,
+    coordinates: { latitude, longitude },
+    validatedAt: new Date().toISOString(),
+  });
+});
+
+// ===========================
+// CONSENT CAPTURE
+// ===========================
+app.post('/consent', (req, res) => {
+  const { sessionId, userId, consentType, verballyAgreed, audioUrl } = req.body;
+
+  console.log(`✅ Consent recorded for session ${sessionId}: ${consentType}`);
+
+  const consent = {
+    id: `consent_${Date.now()}`,
+    sessionId,
+    userId,
+    consentType: consentType || 'loan_processing',
+    verballyAgreed: verballyAgreed ?? true,
+    recorded: !!audioUrl,
+    audioUrl: audioUrl || null,
+    timestamp: new Date().toISOString(),
+    valid: true,
+  };
+
+  consentRecords[sessionId] = consentRecords[sessionId] || [];
+  consentRecords[sessionId].push(consent);
+
+  res.json(consent);
+});
+
+// Get consent records for session
+app.get('/consent/:sessionId', (req, res) => {
+  const consents = consentRecords[req.params.sessionId] || [];
+  res.json({ sessionId: req.params.sessionId, consents });
+});
+
+// ===========================
+// AGE CONSISTENCY CHECK
+// ===========================
+app.post('/verify-age', (req, res) => {
+  const { sessionId, declaredAge, estimatedAge, declaredDob } = req.body;
+
+  const ageDiff = Math.abs((declaredAge || 30) - (estimatedAge || 30));
+  const isConsistent = ageDiff <= 5;
+  const meetsMinAge = (estimatedAge || declaredAge || 30) >= parseInt(process.env.MIN_AGE || '18');
+  const meetsMaxAge = (estimatedAge || declaredAge || 30) <= parseInt(process.env.MAX_AGE || '65');
+
+  const fraudSignals: string[] = [];
+  if (!isConsistent) fraudSignals.push(`Age mismatch: declared ${declaredAge} vs estimated ${estimatedAge}`);
+  if (!meetsMinAge) fraudSignals.push('Below minimum age requirement');
+  if (!meetsMaxAge) fraudSignals.push('Above maximum age requirement');
+
+  res.json({
+    sessionId,
+    consistent: isConsistent,
+    eligible: meetsMinAge && meetsMaxAge,
+    declaredAge,
+    estimatedAge,
+    ageDifference: ageDiff,
+    fraudSignals,
+  });
+});
+
+// Get KYC status for session
+app.get('/status/:sessionId', (req, res) => {
+  const records = kycRecords[req.params.sessionId] || [];
+  const consents = consentRecords[req.params.sessionId] || [];
+  const allVerified = records.length > 0 && records.every((r: any) => r.status === 'verified');
+  const hasConsent = consents.length > 0;
+
+  res.json({
+    sessionId: req.params.sessionId,
+    kycStatus: allVerified ? 'verified' : records.length > 0 ? 'partial' : 'pending',
+    consentStatus: hasConsent ? 'recorded' : 'pending',
+    verifications: records,
+    consents,
+  });
+});
+
+// Health check
+app.get('/health', (_req, res) => {
+  res.json({
+    status: 'KYC Service is running',
+    geofence: GEOFENCE.country,
+    features: ['document_verification', 'geo_validation', 'consent_capture', 'age_verification'],
+  });
 });
 
 app.listen(PORT, () => {

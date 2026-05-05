@@ -1,361 +1,80 @@
-# Video-Based Digital Loan Origination & Risk Assessment System
+# LoanVision AI — Video-Based Digital Loan Origination System
 
-A comprehensive microservices-based platform for secure, AI-powered digital loan onboarding using live video calls.
+A secure, AI-powered loan origination platform that onboards customers through live video calls, capturing consent, identity verification, and risk assessment in real-time.
 
-## 📋 Project Overview
-
-This system enables end-to-end loan onboarding through:
-- **Live Video Calls**: Real-time customer interaction and verification
-- **AI/ML Integration**: Age estimation, risk assessment, and intelligent decision-making
-- **Compliance**: Full KYC adherence, audit trails, and consent capture
-- **Real-time Processing**: Job queues for STT, vision analysis, and risk assessment
-- **Personalized Offers**: Dynamic loan offers based on policy and risk scores
-
-## 🏗️ Architecture
-
-### Microservices
-
-| Service | Port | Tech Stack | Purpose |
-|---------|------|-----------|---------|
-| **API Gateway** | 3000 | Node.js/Express | Main entry point, routing, authentication |
-| **Session Service** | 3001 | Node.js/WebSocket | WebRTC signaling, real-time session management |
-| **Media Service** | 3002 | Node.js | Stream handling, S3 uploads, video storage |
-| **STT Service** | 3003 | Node.js | Speech-to-text processing, transcription jobs |
-| **KYC Service** | 3004 | Node.js/PostgreSQL | Identity verification, geo-validation |
-| **Risk Service** | 3005 | Python/FastAPI | ML-based risk scoring, fraud detection |
-| **Vision Service** | 3006 | Python/FastAPI | Age estimation, liveness detection |
-| **LLM Service** | 3007 | Python/FastAPI | Conversational analysis, data extraction |
-| **Offer Service** | 3008 | Node.js/PostgreSQL | Loan offer generation and management |
-| **Audit Service** | 3009 | Node.js/MongoDB | Logging, compliance, audit trails |
-
-### Data Layer
-
-- **PostgreSQL**: User data, KYC info, loan offers, audit logs
-- **MongoDB**: Transcripts, unstructured data, LLM outputs
-- **Redis**: Session caching, queues, real-time data
-
-### Supporting Infrastructure
-
-- **BullMQ + Redis**: Async job processing
-- **Docker Compose**: Local development environment
-- **AWS S3**: Video recording storage
-- **JWT/OTP**: Authentication and verification
-
-## 📁 Project Structure
+## Architecture
 
 ```
-video-loan-system/
-├── services/                    # Microservices
-│   ├── api-gateway/            # Main API entry point
-│   ├── session-service/        # WebRTC & signaling
-│   ├── media-service/          # Video/audio handling
-│   ├── stt-service/            # Speech-to-text
-│   ├── kyc-service/            # Identity verification
-│   ├── risk-service/           # Risk scoring (Python)
-│   ├── vision-service/         # Age & liveness (Python)
-│   ├── llm-service/            # LLM analysis (Python)
-│   ├── offer-service/          # Loan offers
-│   └── audit-service/          # Audit & logging
-├── shared/
-│   ├── models/                 # Shared types & Prisma schema
-│   ├── queues/                 # Job queue definitions
-│   └── utils/                  # Common helpers
-├── frontend/                   # React application
-│   ├── src/
-│   │   ├── components/         # Reusable components
-│   │   ├── pages/             # Page components
-│   │   ├── App.tsx            # Main app
-│   │   └── main.tsx           # Entry point
-│   ├── vite.config.ts         # Vite configuration
-│   └── package.json
-├── config/
-│   └── prisma.schema          # Database schema
-├── docker-compose.yml         # Service orchestration
-├── .env.example              # Environment template
-└── package.json              # Root monorepo config
+Frontend (React + Vite)  ──►  API Gateway (:3000)
+                                    │
+                    ┌───────────────┼───────────────┐
+                    ▼               ▼               ▼
+            Session (:3001)   Media (:3002)    STT (:3003)
+            KYC (:3004)       Risk (:3005)     Vision (:3006)
+            LLM (:3007)       Offer (:3008)    Audit (:3009)
 ```
 
-## 🚀 Getting Started
+| Service | Port | Language | Purpose |
+|---------|------|----------|---------|
+| **API Gateway** | 3000 | Node.js | JWT auth, routing, pipeline orchestration |
+| **Session** | 3001 | Node.js | WebRTC signaling, session management |
+| **Media** | 3002 | Node.js | Video/audio storage & retrieval |
+| **STT** | 3003 | Node.js | Speech-to-text (Deepgram + simulation) |
+| **KYC** | 3004 | Node.js | Geo-fence, consent, age verification |
+| **Risk** | 3005 | Python | Credit scoring, fraud detection |
+| **Vision** | 3006 | Python | Face detection, age estimation (MediaPipe) |
+| **LLM** | 3007 | Python | Conversation analysis (Groq/Gemini/local) |
+| **Offer** | 3008 | Node.js | Policy-based offer generation, EMI calc |
+| **Audit** | 3009 | Node.js | Immutable audit trail & compliance logs |
 
-### Prerequisites
+## Quick Start
 
-- **Node.js** 18+ and npm
-- **Python** 3.11+
-- **Docker & Docker Compose**
-- **Git**
-
-### Installation
-
-1. **Clone the repository**
-```bash
-git clone <repository-url>
-cd video-loan-system
-```
-
-2. **Setup environment**
-```bash
-cp .env.example .env
-# Edit .env with your credentials
-```
-
-3. **Install dependencies**
-```bash
-npm install
-# This installs root dependencies and triggers workspace setup
-```
-
-4. **Start services with Docker**
-```bash
-docker-compose up -d
-```
-
-Verify all services are running:
-```bash
-docker-compose ps
-```
-
-5. **Run database migrations** (if using Prisma)
-```bash
-npm run db:migrate
-```
-
-## 🔧 Configuration
-
-### Environment Variables
-
-Key variables in `.env`:
-
-```env
-# Database
-DATABASE_URL=postgresql://postgres:password@localhost:5432/video_loan_db
-MONGODB_URI=mongodb://admin:password@localhost:27017/video_loan_system
-REDIS_URL=redis://localhost:6379
-
-# AWS
-AWS_REGION=us-east-1
-AWS_S3_BUCKET=video-loan-recordings
-
-# LLM Provider - Choose One (see LLM_PROVIDERS_GUIDE.md)
-LLM_PROVIDER=groq              # Options: groq, ollama, openai, gemini, anthropic
-GROQ_API_KEY=gsk-...          # Best rate limits (30 req/min), recommended for dev
-
-# Optional: Other LLM providers
-# OPENAI_API_KEY=sk-...
-# ANTHROPIC_API_KEY=sk-ant-...
-# GEMINI_API_KEY=...
-# LOCAL_LLM_URL=http://localhost:11434  # For Ollama
-```
-
-For detailed LLM provider options and setup, see [**LLM_PROVIDERS_GUIDE.md**](./LLM_PROVIDERS_GUIDE.md)
-
-### ⭐ Quick LLM Setup
-
-**Option 1: Groq (RECOMMENDED - 30 req/min)**
-```bash
-# 1. Get API key from https://console.groq.com/keys
-# 2. Add to .env:
-LLM_PROVIDER=groq
-GROQ_API_KEY=your_key_here
-# 3. Restart: docker-compose restart llm-service
-```
-
-**Option 2: Ollama (Unlimited, Local)**
-```bash
-# 1. Install: https://ollama.ai
-# 2. Run: ollama run mistral
-# 3. Add to .env:
-LLM_PROVIDER=ollama
-LOCAL_LLM_URL=http://localhost:11434
-```
-
-**Option 3: Other Providers** - See [LLM_PROVIDERS_GUIDE.md](./LLM_PROVIDERS_GUIDE.md)
-DEEPGRAM_API_KEY=...
-
-# Authentication
-JWT_SECRET=your_secret_key
-OTP_EXPIRY=5m
-```
-
-## 📦 Service Communication
-
-### Event Flow
-
-```
-Customer Entry
-    ↓
-API Gateway (Session Init)
-    ↓
-Session Service (WebRTC Signaling)
-    ↓
-Media Service (Record Video/Audio)
-    ↓
-├─ STT Service (Transcription)
-├─ Vision Service (Age Estimation)
-└─ KYC Service (Identity Check)
-    ↓
-LLM Service (Data Analysis)
-    ↓
-Risk Service (Scoring)
-    ↓
-Offer Service (Generate Offers)
-    ↓
-Audit Service (Log Everything)
-```
-
-### API Endpoints
-
-#### API Gateway
-```
-POST   /api/sessions              - Create new session
-GET    /api/sessions/:id          - Get session details
-POST   /api/sessions/:id/complete - Mark session complete
-```
-
-#### Offer Service
-```
-POST   /api/offers/generate       - Generate loan offer
-GET    /api/offers/:offerId       - Get offer details
-POST   /api/offers/:offerId/accept - Accept offer
-```
-
-#### Audit Service
-```
-POST   /api/audit/log             - Log audit event
-GET    /api/audit/logs/:sessionId - Get session logs
-```
-
-## 🧪 Development
-
-### Running Services Locally
-
-**Option 1: With Docker**
-```bash
-docker-compose up -d
-```
-
-**Option 2: Individual Services**
-```bash
-# Terminal 1 - API Gateway
-cd services/api-gateway
-npm run dev
-
-# Terminal 2 - Session Service
-cd services/session-service
-npm run dev
-
-# Terminal 3 - Python Service (Risk)
-cd services/risk-service
-python -m uvicorn src.main:app --reload --port 3005
-```
-
-### Frontend Development
+### Frontend Only (No Backend Required)
 ```bash
 cd frontend
+npm install
 npm run dev
 # Open http://localhost:5173
 ```
+The frontend works standalone with built-in simulation.
 
-### Testing
-
+### Full Stack with Docker
 ```bash
-npm run test                    # Run all tests
-npm run test:watch            # Watch mode
-npm run coverage              # Coverage report
-```
-
-### Code Quality
-
-```bash
-npm run lint                  # Lint all services
-npm run build                 # Build all services
-```
-
-## 🐳 Docker Deployment
-
-### Build Images
-```bash
-docker-compose build
-```
-
-### Start Stack
-```bash
+cp .env.example .env   # Edit with your keys
 docker-compose up -d
+cd frontend && npm run dev
 ```
 
-### View Logs
+### Individual Service
 ```bash
-docker-compose logs -f [service-name]
+# Node.js services
+cd services/api-gateway && npm install && npm run dev
+
+# Python services
+cd services/risk-service && pip install fastapi uvicorn pydantic python-dotenv && uvicorn src.main:app --port 3005 --reload
 ```
 
-### Stop Stack
-```bash
-docker-compose down -v       # Include -v to remove volumes
-```
+## Key Features
 
-## 🔐 Security Considerations
+- **Video KYC**: Live webcam with face detection & liveness checks
+- **Real-time STT**: Browser Speech API + Deepgram integration
+- **AI Analysis**: LLM-powered conversation intelligence (Groq/Gemini/OpenAI/Ollama)
+- **Risk Engine**: Rule-based scoring with bureau simulation & fraud detection
+- **Offer Generation**: Policy-driven with reducing-balance EMI calculation
+- **Audit Trail**: Immutable logs for regulatory compliance
+- **Geo-Fencing**: Location validation with configurable boundaries
+- **Consent Capture**: Verbal consent recording with audit trail
 
-1. **API Authentication**: JWT tokens with OTP verification
-2. **Video Privacy**: All videos encrypted before S3 storage
-3. **Data Minimization**: Transcripts anonymized after processing
-4. **Audit Logging**: Immutable logs of all operations
-5. **SSL/TLS**: HTTPS for all external communication
-6. **Rate Limiting**: API gateway enforces rate limits
+## Environment Variables
 
-## 📊 Database Schema
+Copy `.env.example` to `.env`. Required keys:
+- `JWT_SECRET` — Authentication secret
+- `DEEPGRAM_API_KEY` — For real STT (optional, simulation available)
+- `GROQ_API_KEY` or `GEMINI_API_KEY` — For LLM analysis (optional)
 
-### Key Tables (PostgreSQL)
+## Tech Stack
 
-- **Users**: Customer profiles and KYC data
-- **VideoSessions**: Call records with metadata
-- **STTTranscripts**: Conversation transcripts
-- **AgeEstimations**: Computer vision results
-- **RiskAssessments**: Risk scores and indicators
-- **LoanOffers**: Generated loan offers
-- **ConsentRecords**: Verbal consent audit trail
-- **AuditLogs**: Complete audit trail
-
-See `config/prisma.schema` for full schema.
-
-## 🎯 Judging Criteria Mapping
-
-| Criterion | Implementation |
-|-----------|-----------------|
-| **End-to-End Digitization** | Complete video-based onboarding with auto-filled forms |
-| **Accuracy & Compliance** | KYC integrated, geo-validation, audit trails |
-| **Risk Mitigation** | ML-based fraud detection, location verification |
-| **Intelligence & Personalization** | LLM contextual analysis, personalized offers |
-| **Scalability & Reliability** | Microservices, job queues, horizontal scaling |
-
-## 📝 Development Roadmap
-
-- [ ] Integration with Deepgram/OpenAI for STT
-- [ ] AWS Rekognition for computer vision
-- [ ] Anthropic Claude API integration
-- [ ] Bureau data connectors
-- [ ] Advanced fraud detection models
-- [ ] Mobile app (React Native)
-- [ ] Kubernetes deployment configs
-- [ ] Advanced analytics dashboard
-- [ ] Webhook integrations
-- [ ] SMS/WhatsApp notifications
-
-## 🤝 Contributing
-
-1. Create a feature branch (`git checkout -b feature/your-feature`)
-2. Commit changes (`git commit -am 'Add feature'`)
-3. Push to branch (`git push origin feature/your-feature`)
-4. Open a Pull Request
-
-## 📞 Support & Contact
-
-For issues or questions:
-- Create an issue in the repository
-- Contact the development team
-
-## 📄 License
-
-This project is proprietary and confidential.
-
----
-
-**Ready to start?** Run `docker-compose up -d` and visit `http://localhost:5173` to begin!
+- **Frontend**: React 18, TypeScript, Vite, Web Speech API
+- **Backend (Node.js)**: Express, Socket.io, Redis, Bull
+- **Backend (Python)**: FastAPI, MediaPipe, OpenCV
+- **Infrastructure**: Docker Compose, PostgreSQL, MongoDB, Redis
