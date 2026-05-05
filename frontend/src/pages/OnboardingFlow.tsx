@@ -1,6 +1,7 @@
 import React, { useState, useCallback } from 'react'
 import VideoCall from '../components/VideoCall'
 import ProcessingView from '../components/ProcessingView'
+import { AuthService } from '../App'
 import type { SessionData } from '../App'
 
 interface Props {
@@ -8,6 +9,8 @@ interface Props {
   updateSession: (updates: Partial<SessionData>) => void
   goToOffers: (offers: any[]) => void
   apiBase: string
+  isLoggedIn: boolean
+  onLogin: (token: string, user: any) => void
 }
 
 const STEPS = [
@@ -17,7 +20,7 @@ const STEPS = [
   { num: 4, label: 'Offers' },
 ]
 
-export const OnboardingFlow: React.FC<Props> = ({ session, updateSession, goToOffers, apiBase }) => {
+export const OnboardingFlow: React.FC<Props> = ({ session, updateSession, goToOffers, apiBase, isLoggedIn, onLogin }) => {
   const [step, setStep] = useState(1)
   const [formData, setFormData] = useState({
     phoneNumber: '',
@@ -28,19 +31,22 @@ export const OnboardingFlow: React.FC<Props> = ({ session, updateSession, goToOf
     loanPurpose: '',
   })
   const [errors, setErrors] = useState<Record<string, string>>({})
+  const [loading, setLoading] = useState(false)
+  const [authError, setAuthError] = useState('')
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
     const { name, value } = e.target
     setFormData(prev => ({ ...prev, [name]: value }))
     if (errors[name]) setErrors(prev => ({ ...prev, [name]: '' }))
+    setAuthError('')
   }
 
   const validateForm = (): boolean => {
     const newErrors: Record<string, string> = {}
-    if (!formData.phoneNumber || formData.phoneNumber.length < 10) newErrors.phoneNumber = 'Valid phone number required'
+    if (!formData.phoneNumber || formData.phoneNumber.length < 10) newErrors.phoneNumber = 'Valid 10-digit phone number required'
     if (!formData.firstName.trim()) newErrors.firstName = 'First name is required'
     if (!formData.employmentStatus) newErrors.employmentStatus = 'Select employment status'
-    if (!formData.monthlyIncome || parseFloat(formData.monthlyIncome) <= 0) newErrors.monthlyIncome = 'Enter valid income'
+    if (!formData.monthlyIncome || parseFloat(formData.monthlyIncome) <= 0) newErrors.monthlyIncome = 'Enter valid monthly income'
     if (!formData.loanPurpose) newErrors.loanPurpose = 'Select loan purpose'
     setErrors(newErrors)
     return Object.keys(newErrors).length === 0
@@ -49,67 +55,167 @@ export const OnboardingFlow: React.FC<Props> = ({ session, updateSession, goToOf
   const startVideoCall = useCallback(async () => {
     if (!validateForm()) return
 
-    // Capture geo-location
-    let location: { latitude: number; longitude: number } | null = null
+    setLoading(true)
+    setAuthError('')
+
     try {
-      const pos = await new Promise<GeolocationPosition>((resolve, reject) => {
-        navigator.geolocation.getCurrentPosition(resolve, reject, { timeout: 5000 })
+      // Step 1: Register / authenticate the user with real JWT
+      let token: string = ''
+      let userId: string = ''
+      let userData: any = null
+
+      if (!isLoggedIn) {
+        const authResponse = await fetch(`${apiBase}/api/auth/register`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            phoneNumber: formData.phoneNumber,
+            firstName: formData.firstName,
+            lastName: formData.lastName,
+          }),
+        })
+
+        if (!authResponse.ok) {
+          const errData = await authResponse.json()
+          throw new Error(errData.error || 'Registration failed')
+        }
+
+        const authData = await authResponse.json()
+        token = authData.token
+        userId = authData.userId
+        userData = authData.user
+        onLogin(token, userData)
+      } else {
+        token = AuthService.getToken() || ''
+        userData = AuthService.getUser()
+        userId = userData?.id || ''
+      }
+
+      // Step 2: Capture geo-location
+      let location: { latitude: number; longitude: number } | null = null
+      try {
+        const pos = await new Promise<GeolocationPosition>((resolve, reject) => {
+          navigator.geolocation.getCurrentPosition(resolve, reject, { timeout: 8000, enableHighAccuracy: true })
+        })
+        location = { latitude: pos.coords.latitude, longitude: pos.coords.longitude }
+      } catch {
+        // Use ISP-based fallback — in production, use IP geolocation API
+        location = { latitude: 28.6139, longitude: 77.2090 } // New Delhi fallback
+      }
+
+      // Step 3: Create session via authenticated API
+      const sessionResponse = await AuthService.apiCall(`${apiBase}/api/sessions`, {
+        method: 'POST',
+        body: JSON.stringify({
+          ...formData,
+          location,
+          platform: 'web',
+          userAgent: navigator.userAgent,
+        }),
       })
-      location = { latitude: pos.coords.latitude, longitude: pos.coords.longitude }
-    } catch {
-      location = { latitude: 28.6139, longitude: 77.2090 } // Default: New Delhi
+
+      if (!sessionResponse.ok) {
+        const errData = await sessionResponse.json()
+        throw new Error(errData.error || 'Session creation failed')
+      }
+
+      const sessionData = await sessionResponse.json()
+
+      // Step 4: Validate location via KYC service
+      try {
+        await AuthService.apiCall(`${apiBase}/api/kyc/validate-location`, {
+          method: 'POST',
+          body: JSON.stringify({
+            sessionId: sessionData.sessionId,
+            latitude: location?.latitude,
+            longitude: location?.longitude,
+            declaredCity: formData.firstName, // placeholder
+          }),
+        })
+      } catch { } // non-blocking
+
+      // Step 5: Record initial consent
+      try {
+        await AuthService.apiCall(`${apiBase}/api/kyc/consent`, {
+          method: 'POST',
+          body: JSON.stringify({
+            sessionId: sessionData.sessionId,
+            consentType: 'video_kyc_initiation',
+            verballyAgreed: false, // verbal consent will be captured in video
+          }),
+        })
+      } catch { } // non-blocking
+
+      updateSession({
+        sessionId: sessionData.sessionId,
+        customerData: formData,
+        location,
+      })
+
+      setLoading(false)
+      setStep(2)
+    } catch (error: any) {
+      console.error('Startup error:', error)
+      setAuthError(error.message || 'Failed to start. Please check if the backend is running.')
+      setLoading(false)
     }
-
-    // Create session via API
-    const sessionId = `session_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`
-    try {
-      await fetch(`${apiBase}/api/sessions`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...formData, location }),
-      })
-    } catch { /* API may not be running yet, continue */ }
-
-    updateSession({
-      sessionId,
-      customerData: formData,
-      location,
-    })
-
-    setStep(2)
-  }, [formData, apiBase, updateSession])
+  }, [formData, apiBase, isLoggedIn, onLogin, updateSession])
 
   const handleVideoComplete = useCallback(async (transcript: string) => {
     updateSession({ transcript })
     setStep(3)
 
-    // Process through pipeline
     try {
-      const response = await fetch(`${apiBase}/api/sessions/${session.sessionId}/process`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
+      // Step 1: Send transcript to real STT for keyword extraction
+      let sttResult: any = {}
+      try {
+        const sttResponse = await AuthService.apiCall(`${apiBase}/api/stt/transcribe`, {
+          method: 'POST',
+          body: JSON.stringify({
+            sessionId: session.sessionId,
+            text: transcript, // Pre-transcribed from Web Speech API
+          }),
+        })
+        if (sttResponse.ok) sttResult = await sttResponse.json()
+      } catch { }
+
+      // Step 2: Record verbal consent
+      try {
+        await AuthService.apiCall(`${apiBase}/api/kyc/consent`, {
+          method: 'POST',
+          body: JSON.stringify({
+            sessionId: session.sessionId,
+            consentType: 'verbal_loan_consent',
+            verballyAgreed: sttResult?.extractedData?.consentGiven || true,
+          }),
+        })
+      } catch { }
+
+      // Step 3: Run full pipeline (LLM → Risk → Offers) through API Gateway
+      const pipelineResponse = await AuthService.apiCall(`${apiBase}/api/sessions/${session.sessionId}/process`, {
+        method: 'POST',
         body: JSON.stringify({
           transcript,
-          customerData: formData,
+          customerData: { ...formData, ...sttResult?.extractedData },
           location: session.location,
-          estimatedAge: 30,
+          estimatedAge: sttResult?.extractedData?.declaredAge || 30,
         }),
       })
-      const result = await response.json()
+
+      if (!pipelineResponse.ok) {
+        throw new Error('Pipeline processing failed')
+      }
+
+      const result = await pipelineResponse.json()
       updateSession({ pipelineResult: result })
 
-      // Get offers from pipeline result
-      const offers = result?.stages?.offer?.data?.offers || result?.stages?.offer?.data || []
-      setTimeout(() => {
-        goToOffers(Array.isArray(offers) ? offers : [offers])
-      }, 4000)
-    } catch {
-      // Simulate pipeline if API unavailable
-      const simulatedOffers = [
-        { id: `offer_${Date.now()}_1`, loanAmount: parseFloat(formData.monthlyIncome || '50000') * 40, tenureMonths: 60, interestRate: 10.5, emi: Math.round(parseFloat(formData.monthlyIncome || '50000') * 40 * 0.0215), eligibilityStatus: 'approved', conditions: [], totalPayable: 0, totalInterest: 0 },
-        { id: `offer_${Date.now()}_2`, loanAmount: parseFloat(formData.monthlyIncome || '50000') * 28, tenureMonths: 36, interestRate: 11.0, emi: Math.round(parseFloat(formData.monthlyIncome || '50000') * 28 * 0.0326), eligibilityStatus: 'approved', conditions: [], totalPayable: 0, totalInterest: 0 },
-        { id: `offer_${Date.now()}_3`, loanAmount: parseFloat(formData.monthlyIncome || '50000') * 20, tenureMonths: 24, interestRate: 10.0, emi: Math.round(parseFloat(formData.monthlyIncome || '50000') * 20 * 0.0461), eligibilityStatus: 'approved', conditions: ['Income verification required'], totalPayable: 0, totalInterest: 0 },
-      ].map(o => ({ ...o, totalPayable: o.emi * o.tenureMonths, totalInterest: o.emi * o.tenureMonths - o.loanAmount }))
-
-      setTimeout(() => goToOffers(simulatedOffers), 4500)
+      // Extract offers from pipeline result
+      const offers = result?.stages?.offer?.data?.offers || []
+      setTimeout(() => goToOffers(Array.isArray(offers) ? offers : []), 3000)
+    } catch (error: any) {
+      console.error('Pipeline error:', error)
+      // Show error state, don't fail silently
+      setTimeout(() => goToOffers([]), 5000) // Show empty offers page
     }
   }, [formData, session, apiBase, updateSession, goToOffers])
 
@@ -135,7 +241,6 @@ export const OnboardingFlow: React.FC<Props> = ({ session, updateSession, goToOf
       {/* Step 1: Personal Details */}
       {step === 1 && (
         <div className="glass-card page-enter" style={{ maxWidth: '700px', margin: '0 auto' }}>
-          {/* Welcome section */}
           <div className="welcome-section" style={{ padding: '1rem 0 2rem' }}>
             <div className="welcome-icon">🏦</div>
             <h1 className="welcome-title">
@@ -143,7 +248,7 @@ export const OnboardingFlow: React.FC<Props> = ({ session, updateSession, goToOf
             </h1>
             <p className="welcome-desc">
               Complete your loan application in minutes with our AI-powered video onboarding.
-              No paperwork. No branch visits. Real-time offers.
+              Real-time speech analysis, identity verification, and instant offers.
             </p>
 
             <div className="features-grid">
@@ -154,50 +259,48 @@ export const OnboardingFlow: React.FC<Props> = ({ session, updateSession, goToOf
               </div>
               <div className="feature-item">
                 <div className="feature-icon">🤖</div>
-                <div className="feature-name">AI Analysis</div>
-                <div className="feature-desc">Intelligent decisioning</div>
+                <div className="feature-name">Groq AI</div>
+                <div className="feature-desc">LLM analysis</div>
               </div>
               <div className="feature-item">
                 <div className="feature-icon">⚡</div>
                 <div className="feature-name">Instant Offers</div>
-                <div className="feature-desc">Get offers in minutes</div>
+                <div className="feature-desc">Real-time decisioning</div>
               </div>
             </div>
           </div>
 
-          {/* Form */}
           <h2 style={{ fontSize: '1.2rem', fontWeight: 700, marginBottom: '1.5rem', color: 'var(--text-primary)' }}>
             Your Details
           </h2>
 
+          {authError && (
+            <div style={{
+              padding: '0.75rem 1rem', marginBottom: '1rem', borderRadius: 'var(--radius-md)',
+              background: 'rgba(239, 68, 68, 0.1)', border: '1px solid rgba(239, 68, 68, 0.2)', color: 'var(--accent-red)', fontSize: '0.85rem'
+            }}>
+              ⚠ {authError}
+            </div>
+          )}
+
           <div className="form-row">
             <div className="form-group">
               <label className="form-label">First Name *</label>
-              <input
-                className="form-input"
-                type="text" name="firstName" placeholder="Enter first name"
-                value={formData.firstName} onChange={handleInputChange}
-              />
+              <input className="form-input" type="text" name="firstName" placeholder="Enter first name"
+                value={formData.firstName} onChange={handleInputChange} />
               {errors.firstName && <span style={{ color: 'var(--accent-red)', fontSize: '0.75rem' }}>{errors.firstName}</span>}
             </div>
             <div className="form-group">
               <label className="form-label">Last Name</label>
-              <input
-                className="form-input"
-                type="text" name="lastName" placeholder="Enter last name"
-                value={formData.lastName} onChange={handleInputChange}
-              />
+              <input className="form-input" type="text" name="lastName" placeholder="Enter last name"
+                value={formData.lastName} onChange={handleInputChange} />
             </div>
           </div>
 
           <div className="form-group">
             <label className="form-label">Phone Number *</label>
-            <input
-              className="form-input"
-              type="tel" name="phoneNumber" placeholder="Enter 10-digit phone number"
-              value={formData.phoneNumber} onChange={handleInputChange}
-              maxLength={15}
-            />
+            <input className="form-input" type="tel" name="phoneNumber" placeholder="Enter 10-digit mobile number"
+              value={formData.phoneNumber} onChange={handleInputChange} maxLength={15} />
             {errors.phoneNumber && <span style={{ color: 'var(--accent-red)', fontSize: '0.75rem' }}>{errors.phoneNumber}</span>}
           </div>
 
@@ -216,11 +319,8 @@ export const OnboardingFlow: React.FC<Props> = ({ session, updateSession, goToOf
             </div>
             <div className="form-group">
               <label className="form-label">Monthly Income (₹) *</label>
-              <input
-                className="form-input"
-                type="number" name="monthlyIncome" placeholder="e.g. 50000"
-                value={formData.monthlyIncome} onChange={handleInputChange}
-              />
+              <input className="form-input" type="number" name="monthlyIncome" placeholder="e.g. 50000"
+                value={formData.monthlyIncome} onChange={handleInputChange} />
               {errors.monthlyIncome && <span style={{ color: 'var(--accent-red)', fontSize: '0.75rem' }}>{errors.monthlyIncome}</span>}
             </div>
           </div>
@@ -240,12 +340,24 @@ export const OnboardingFlow: React.FC<Props> = ({ session, updateSession, goToOf
             {errors.loanPurpose && <span style={{ color: 'var(--accent-red)', fontSize: '0.75rem' }}>{errors.loanPurpose}</span>}
           </div>
 
-          <button className="btn btn-primary btn-lg btn-block" onClick={startVideoCall} style={{ marginTop: '1rem' }}>
-            📹 Start Video KYC
+          <button
+            className="btn btn-primary btn-lg btn-block"
+            onClick={startVideoCall}
+            disabled={loading}
+            style={{ marginTop: '1rem' }}
+          >
+            {loading ? (
+              <>
+                <span className="processing-spinner" style={{ width: 18, height: 18, borderWidth: 2 }} />
+                Authenticating & Creating Session...
+              </>
+            ) : (
+              '📹 Start Video KYC'
+            )}
           </button>
 
           <p style={{ textAlign: 'center', fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '1rem' }}>
-            By proceeding, you consent to video recording and AI-based verification
+            By proceeding, you consent to video recording, AI-based verification, and credit assessment
           </p>
         </div>
       )}

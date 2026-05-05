@@ -1,44 +1,56 @@
 import express from 'express';
+import { MongoClient, Db, Collection } from 'mongodb';
 import dotenv from 'dotenv';
 
-dotenv.config();
+dotenv.config({ path: '../../.env' });
 
 const app = express();
 const PORT = process.env.AUDIT_SERVICE_PORT || 3009;
 app.use(express.json());
 
-// In-memory audit log storage (MongoDB connection optional)
-const auditLogs: any[] = [];
-let mongoCollection: any = null;
+// ===========================
+// MONGODB CONNECTION
+// ===========================
+let db: Db;
+let auditCollection: Collection;
+let mongoConnected = false;
 
-// Try to connect to MongoDB
+const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://localhost:27017/video_loan_system';
+
 const initMongo = async () => {
   try {
-    const mongoUri = process.env.MONGODB_URI;
-    if (mongoUri && mongoUri !== 'mongodb://localhost:27017/video_loan_system') {
-      const { MongoClient } = await import('mongodb');
-      const client = new MongoClient(mongoUri);
-      await client.connect();
-      const db = client.db('video_loan_system');
-      mongoCollection = db.collection('audit_logs');
-      console.log('✅ Connected to MongoDB for audit logs');
-    } else {
-      console.log('⚠️  MongoDB not configured, using in-memory audit storage');
-    }
-  } catch (error) {
-    console.log('⚠️  MongoDB connection failed, using in-memory audit storage');
+    const client = new MongoClient(MONGODB_URI);
+    await client.connect();
+    db = client.db('video_loan_system');
+    auditCollection = db.collection('audit_logs');
+
+    // Create indexes for efficient querying
+    await auditCollection.createIndex({ sessionId: 1, timestamp: -1 });
+    await auditCollection.createIndex({ userId: 1 });
+    await auditCollection.createIndex({ action: 1 });
+    await auditCollection.createIndex({ timestamp: -1 });
+    await auditCollection.createIndex({ 'level': 1 });
+
+    mongoConnected = true;
+    console.log(`✅ MongoDB connected: ${MONGODB_URI}`);
+
+    const count = await auditCollection.countDocuments();
+    console.log(`📊 Existing audit logs: ${count}`);
+  } catch (error: any) {
+    console.error(`❌ MongoDB connection failed: ${error.message}`);
+    console.error('Audit service requires MongoDB. Start with: docker run -d -p 27017:27017 mongo:7');
   }
 };
 initMongo();
 
-// Store audit log
-async function storeLog(log: any): Promise<void> {
-  auditLogs.push(log);
-  if (mongoCollection) {
-    try {
-      await mongoCollection.insertOne(log);
-    } catch { /* fallback to in-memory */ }
-  }
+function getLogLevel(action: string): string {
+  if (!action) return 'info';
+  const upper = action.toUpperCase();
+  if (upper.includes('ERROR') || upper.includes('FAIL')) return 'error';
+  if (upper.includes('FRAUD') || upper.includes('REJECT')) return 'warning';
+  if (upper.includes('CONSENT') || upper.includes('ACCEPT')) return 'critical';
+  if (upper.includes('STARTED') || upper.includes('CREATED')) return 'info';
+  return 'info';
 }
 
 // ===========================
@@ -47,132 +59,180 @@ async function storeLog(log: any): Promise<void> {
 
 // Submit audit log
 app.post('/log', async (req, res) => {
-  const { sessionId, userId, action, details, source } = req.body;
+  if (!mongoConnected) return res.status(503).json({ error: 'MongoDB not connected' });
+
+  const { sessionId, userId, action, details, source, timestamp } = req.body;
 
   const auditLog = {
-    id: `audit_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`,
     sessionId: sessionId || 'system',
     userId: userId || 'system',
     action: action || 'UNKNOWN',
     details: details || {},
     source: source || 'unknown',
-    timestamp: new Date().toISOString(),
+    timestamp: timestamp ? new Date(timestamp) : new Date(),
     level: getLogLevel(action),
+    createdAt: new Date(),
   };
 
-  await storeLog(auditLog);
-  console.log(`📝 [${auditLog.level}] ${action} - session: ${sessionId} from ${source}`);
-
-  res.json({ id: auditLog.id, message: 'Audit log recorded' });
+  try {
+    const result = await auditCollection.insertOne(auditLog);
+    console.log(`📝 [${auditLog.level.toUpperCase()}] ${action} | session:${sessionId} | source:${source}`);
+    res.json({ id: result.insertedId.toString(), message: 'Audit log recorded' });
+  } catch (e: any) {
+    console.error('MongoDB insert error:', e.message);
+    res.status(500).json({ error: 'Failed to store audit log' });
+  }
 });
 
-// Batch submit logs
+// Batch submit
 app.post('/log/batch', async (req, res) => {
+  if (!mongoConnected) return res.status(503).json({ error: 'MongoDB not connected' });
+
   const { logs } = req.body;
   if (!Array.isArray(logs)) return res.status(400).json({ error: 'logs must be an array' });
 
-  const stored = [];
-  for (const log of logs) {
-    const auditLog = {
-      id: `audit_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`,
-      ...log,
-      timestamp: new Date().toISOString(),
-      level: getLogLevel(log.action),
-    };
-    await storeLog(auditLog);
-    stored.push(auditLog.id);
-  }
+  const formatted = logs.map(l => ({
+    ...l,
+    timestamp: l.timestamp ? new Date(l.timestamp) : new Date(),
+    level: getLogLevel(l.action),
+    createdAt: new Date(),
+  }));
 
-  res.json({ message: `${stored.length} audit logs recorded`, ids: stored });
+  try {
+    const result = await auditCollection.insertMany(formatted);
+    res.json({ message: `${result.insertedCount} logs recorded` });
+  } catch (e: any) {
+    res.status(500).json({ error: 'Batch insert failed' });
+  }
 });
 
 // Get logs by session
 app.get('/logs/:sessionId', async (req, res) => {
-  const sessionId = req.params.sessionId;
+  if (!mongoConnected) return res.status(503).json({ error: 'MongoDB not connected' });
 
-  if (mongoCollection) {
-    try {
-      const logs = await mongoCollection.find({ sessionId }).sort({ timestamp: -1 }).toArray();
-      return res.json(logs);
-    } catch { /* fallback */ }
+  try {
+    const logs = await auditCollection
+      .find({ sessionId: req.params.sessionId })
+      .sort({ timestamp: -1 })
+      .toArray();
+    res.json({ sessionId: req.params.sessionId, count: logs.length, logs });
+  } catch (e: any) {
+    res.status(500).json({ error: 'Failed to fetch logs' });
   }
-
-  const logs = auditLogs.filter(l => l.sessionId === sessionId).sort((a, b) =>
-    new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
-  );
-  res.json(logs);
 });
 
-// Get all logs (with pagination)
+// Get all logs (paginated)
 app.get('/logs', async (req, res) => {
+  if (!mongoConnected) return res.status(503).json({ error: 'MongoDB not connected' });
+
   const page = parseInt(req.query.page as string) || 1;
-  const limit = parseInt(req.query.limit as string) || 50;
+  const limit = Math.min(parseInt(req.query.limit as string) || 50, 200);
   const offset = (page - 1) * limit;
 
-  if (mongoCollection) {
-    try {
-      const total = await mongoCollection.countDocuments();
-      const logs = await mongoCollection.find().sort({ timestamp: -1 }).skip(offset).limit(limit).toArray();
-      return res.json({ total, page, limit, logs });
-    } catch { /* fallback */ }
+  try {
+    const total = await auditCollection.countDocuments();
+    const logs = await auditCollection
+      .find()
+      .sort({ timestamp: -1 })
+      .skip(offset)
+      .limit(limit)
+      .toArray();
+    res.json({ total, page, limit, logs });
+  } catch (e: any) {
+    res.status(500).json({ error: 'Failed to fetch logs' });
   }
-
-  const sorted = [...auditLogs].sort((a, b) =>
-    new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
-  );
-  const paginated = sorted.slice(offset, offset + limit);
-
-  res.json({ total: auditLogs.length, page, limit, logs: paginated });
 });
 
 // Search logs
-app.get('/search', (req, res) => {
-  const { action, source, from, to } = req.query;
+app.get('/search', async (req, res) => {
+  if (!mongoConnected) return res.status(503).json({ error: 'MongoDB not connected' });
 
-  let results = [...auditLogs];
+  const { action, source, userId, level, from, to } = req.query;
+  const filter: any = {};
 
-  if (action) results = results.filter(l => l.action === action);
-  if (source) results = results.filter(l => l.source === source);
-  if (from) results = results.filter(l => new Date(l.timestamp) >= new Date(from as string));
-  if (to) results = results.filter(l => new Date(l.timestamp) <= new Date(to as string));
+  if (action) filter.action = action;
+  if (source) filter.source = source;
+  if (userId) filter.userId = userId;
+  if (level) filter.level = level;
+  if (from || to) {
+    filter.timestamp = {};
+    if (from) filter.timestamp.$gte = new Date(from as string);
+    if (to) filter.timestamp.$lte = new Date(to as string);
+  }
 
-  results.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
-  res.json({ count: results.length, logs: results.slice(0, 100) });
+  try {
+    const logs = await auditCollection
+      .find(filter)
+      .sort({ timestamp: -1 })
+      .limit(100)
+      .toArray();
+    res.json({ count: logs.length, filter, logs });
+  } catch (e: any) {
+    res.status(500).json({ error: 'Search failed' });
+  }
 });
 
 // Consent audit trail
-app.get('/consent/:sessionId', (req, res) => {
-  const consents = auditLogs.filter(
-    l => l.sessionId === req.params.sessionId && l.action.includes('CONSENT')
-  );
-  res.json({ sessionId: req.params.sessionId, consentTrail: consents });
+app.get('/consent/:sessionId', async (req, res) => {
+  if (!mongoConnected) return res.status(503).json({ error: 'MongoDB not connected' });
+
+  try {
+    const logs = await auditCollection
+      .find({ sessionId: req.params.sessionId, action: { $regex: /CONSENT/i } })
+      .sort({ timestamp: 1 })
+      .toArray();
+    res.json({ sessionId: req.params.sessionId, consentTrail: logs });
+  } catch (e: any) {
+    res.status(500).json({ error: 'Failed to fetch consent trail' });
+  }
 });
 
 // Decision audit trail
-app.get('/decisions/:sessionId', (req, res) => {
-  const decisions = auditLogs.filter(
-    l => l.sessionId === req.params.sessionId &&
-      (l.action.includes('RISK') || l.action.includes('OFFER') || l.action.includes('LLM'))
-  );
-  res.json({ sessionId: req.params.sessionId, decisionTrail: decisions });
+app.get('/decisions/:sessionId', async (req, res) => {
+  if (!mongoConnected) return res.status(503).json({ error: 'MongoDB not connected' });
+
+  try {
+    const logs = await auditCollection
+      .find({
+        sessionId: req.params.sessionId,
+        action: { $in: ['RISK_ASSESSED', 'LLM_ANALYSIS_COMPLETED', 'OFFERS_GENERATED', 'OFFER_ACCEPTED', 'PIPELINE_COMPLETED'] },
+      })
+      .sort({ timestamp: 1 })
+      .toArray();
+    res.json({ sessionId: req.params.sessionId, decisionTrail: logs });
+  } catch (e: any) {
+    res.status(500).json({ error: 'Failed to fetch decision trail' });
+  }
 });
 
-// Log level classification
-function getLogLevel(action: string): string {
-  if (!action) return 'info';
-  const upper = action.toUpperCase();
-  if (upper.includes('ERROR') || upper.includes('FAIL')) return 'error';
-  if (upper.includes('FRAUD') || upper.includes('REJECT')) return 'warning';
-  if (upper.includes('CONSENT') || upper.includes('ACCEPT')) return 'critical';
-  return 'info';
-}
+// Stats
+app.get('/stats', async (_req, res) => {
+  if (!mongoConnected) return res.status(503).json({ error: 'MongoDB not connected' });
 
-// Health check
+  try {
+    const total = await auditCollection.countDocuments();
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const todayCount = await auditCollection.countDocuments({ timestamp: { $gte: today } });
+
+    const actionCounts = await auditCollection.aggregate([
+      { $group: { _id: '$action', count: { $sum: 1 } } },
+      { $sort: { count: -1 } },
+      { $limit: 20 },
+    ]).toArray();
+
+    res.json({ total, today: todayCount, byAction: actionCounts });
+  } catch (e: any) {
+    res.status(500).json({ error: 'Stats query failed' });
+  }
+});
+
+// Health
 app.get('/health', (_req, res) => {
   res.json({
-    status: 'Audit Service is running',
-    storage: mongoCollection ? 'mongodb' : 'in-memory',
-    totalLogs: auditLogs.length,
+    status: 'Audit Service running',
+    mongodb: mongoConnected ? 'connected' : 'disconnected',
+    uri: MONGODB_URI.replace(/\/\/.*@/, '//***@'), // hide credentials
   });
 });
 

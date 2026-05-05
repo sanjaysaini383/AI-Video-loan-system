@@ -8,9 +8,11 @@ import httpx
 import json
 import re
 
+# Load .env from project root
+load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), '..', '..', '..', '.env'))
 load_dotenv()
 
-app = FastAPI(title="LLM Service - Conversation Analysis")
+app = FastAPI(title="LLM Service - Real Groq Integration")
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -23,28 +25,42 @@ ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 LOCAL_LLM_URL = os.getenv("LOCAL_LLM_URL", "http://localhost:11434")
 
-SYSTEM_PROMPT = """You are a loan origination AI analyst. Analyze the customer conversation transcript and extract structured intelligence for loan decisioning.
+# Validate configuration
+if LLM_PROVIDER == "groq" and not GROQ_API_KEY:
+    logger.error("FATAL: GROQ_API_KEY is required when LLM_PROVIDER=groq")
 
-Return a JSON object with these fields:
+SYSTEM_PROMPT = """You are a senior loan underwriting AI analyst working for a digital lending platform. 
+Analyze the customer loan application conversation transcript and extract structured intelligence for automated loan decisioning.
+
+Your analysis must be thorough, accurate, and based ONLY on information present in the transcript.
+
+Return ONLY a valid JSON object (no markdown, no explanation) with these EXACT fields:
+
 {
-  "classification": "low|medium|high" (risk classification),
-  "confidence": 0.0-1.0 (your confidence in this classification),
-  "risks": ["list of risk indicators found"],
-  "customer_persona": "description of customer type",
+  "classification": "low" | "medium" | "high",
+  "confidence": <float 0.0-1.0>,
+  "risks": ["list of specific risk indicators found in conversation"],
+  "customer_persona": "brief description of customer profile based on conversation",
   "extracted_data": {
-    "employment_type": "employed|self-employed|unemployed|student",
-    "employer": "name if mentioned",
-    "monthly_income": number or null,
-    "loan_purpose": "purpose stated",
-    "consent_given": true/false,
-    "family_dependents": number or null
+    "employment_type": "salaried" | "self_employed" | "government" | "unemployed" | "student" | "unknown",
+    "employer_name": "company/employer name or null",
+    "designation": "job title or null",
+    "monthly_income": <number or null>,
+    "annual_income": <number or null>,
+    "loan_purpose": "specific purpose stated",
+    "loan_amount_requested": <number or null>,
+    "consent_given": <boolean>,
+    "declared_age": <number or null>,
+    "family_dependents": <number or null>,
+    "existing_loans": <number or null>,
+    "property_owned": <boolean or null>
   },
-  "sentiment": "positive|neutral|negative|anxious",
-  "red_flags": ["any concerning statements or inconsistencies"],
-  "recommendation": "brief recommendation for the loan officer"
-}
-
-Only return valid JSON. Do not include any text outside the JSON."""
+  "sentiment": "positive" | "neutral" | "negative" | "anxious" | "confident",
+  "red_flags": ["any concerning statements, inconsistencies, or evasive behavior"],
+  "recommendation": "clear recommendation for the lending decision",
+  "income_stability": "stable" | "variable" | "uncertain" | "unknown",
+  "repayment_capacity": "high" | "moderate" | "low" | "unknown"
+}"""
 
 
 class LLMAnalysisRequest(BaseModel):
@@ -60,203 +76,252 @@ class LLMAnalysisResponse(BaseModel):
     structured_insights: dict
 
 
-def parse_llm_response(raw_text: str) -> dict:
-    """Extract JSON from LLM response, handling markdown code blocks"""
+def parse_llm_json(raw_text: str) -> dict:
+    """Robustly extract JSON from LLM response"""
     text = raw_text.strip()
     
-    # Try to find JSON in code blocks
-    json_match = re.search(r'```(?:json)?\s*(\{.*?\})\s*```', text, re.DOTALL)
-    if json_match:
-        text = json_match.group(1)
+    # Remove markdown code blocks
+    text = re.sub(r'^```(?:json)?\s*', '', text, flags=re.MULTILINE)
+    text = re.sub(r'```\s*$', '', text, flags=re.MULTILINE)
+    text = text.strip()
     
-    # Try direct JSON parse
+    # Try direct parse
     try:
         return json.loads(text)
     except json.JSONDecodeError:
         pass
     
-    # Try to find JSON object in the text
-    json_match = re.search(r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}', text, re.DOTALL)
-    if json_match:
-        try:
-            return json.loads(json_match.group())
-        except json.JSONDecodeError:
-            pass
+    # Find JSON object boundaries
+    start = text.find('{')
+    if start == -1:
+        raise ValueError("No JSON object found in LLM response")
     
-    return {"classification": "medium", "confidence": 0.5, "risks": [], "error": "Failed to parse LLM response"}
-
-
-def simulate_analysis(transcript: str) -> dict:
-    """Local simulation when no LLM API is configured"""
-    lower = transcript.lower()
-    
-    # Detect risk level from keywords
-    high_risk_words = ["unemployed", "debt", "default", "bankruptcy", "no income", "urgent"]
-    low_risk_words = ["government", "stable", "savings", "property", "salaried", "employed"]
-    
-    high_count = sum(1 for w in high_risk_words if w in lower)
-    low_count = sum(1 for w in low_risk_words if w in lower)
-    
-    if high_count > low_count:
-        classification = "high"
-        confidence = 0.7
-    elif low_count > high_count:
-        classification = "low"
-        confidence = 0.82
-    else:
-        classification = "medium"
-        confidence = 0.75
-    
-    # Extract data
-    risks = []
-    if "unemployed" in lower:
-        risks.append("Customer is unemployed")
-    if "urgent" in lower or "emergency" in lower:
-        risks.append("Urgent funding need - possible financial distress")
-    if "debt" in lower:
-        risks.append("Existing debt mentioned")
-    
-    # Detect consent
-    consent = any(w in lower for w in ["i consent", "i agree", "yes, i agree", "i accept", "give my consent"])
-    
-    # Detect employment
-    employment = "employed"
-    if "self-employed" in lower or "business" in lower:
-        employment = "self-employed"
-    elif "unemployed" in lower:
-        employment = "unemployed"
-    elif "government" in lower:
-        employment = "government"
-    
-    # Detect sentiment
-    positive_words = ["happy", "excited", "great", "thank", "appreciate"]
-    negative_words = ["worried", "anxious", "concerned", "difficult", "problem"]
-    
-    pos = sum(1 for w in positive_words if w in lower)
-    neg = sum(1 for w in negative_words if w in lower)
-    sentiment = "positive" if pos > neg else "negative" if neg > pos else "neutral"
-    
-    return {
-        "classification": classification,
-        "confidence": confidence,
-        "risks": risks,
-        "customer_persona": f"{employment} customer seeking loan",
-        "extracted_data": {
-            "employment_type": employment,
-            "consent_given": consent,
-            "loan_purpose": "personal" if "personal" in lower else "business" if "business" in lower else "education" if "education" in lower else "home" if "home" in lower else "general",
-        },
-        "sentiment": sentiment,
-        "red_flags": risks,
-        "recommendation": f"{'Proceed with caution' if classification == 'high' else 'Recommended for approval' if classification == 'low' else 'Standard review required'}",
-    }
-
-
-async def call_llm(transcript: str) -> dict:
-    """Route to appropriate LLM provider"""
-    prompt = f"{SYSTEM_PROMPT}\n\nTranscript:\n{transcript}"
+    # Find matching closing brace
+    depth = 0
+    end = start
+    for i in range(start, len(text)):
+        if text[i] == '{':
+            depth += 1
+        elif text[i] == '}':
+            depth -= 1
+            if depth == 0:
+                end = i + 1
+                break
     
     try:
-        if LLM_PROVIDER == "groq" and GROQ_API_KEY and GROQ_API_KEY != "gsk_your-groq-key-here":
-            async with httpx.AsyncClient(timeout=30.0) as client:
-                resp = await client.post(
-                    "https://api.groq.com/openai/v1/chat/completions",
-                    headers={"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"},
-                    json={"model": "mixtral-8x7b-32768", "messages": [{"role": "user", "content": prompt}], "max_tokens": 1024},
-                )
-                data = resp.json()
-                content = data.get("choices", [{}])[0].get("message", {}).get("content", "{}")
-                return parse_llm_response(content)
+        return json.loads(text[start:end])
+    except json.JSONDecodeError as e:
+        raise ValueError(f"Failed to parse JSON from LLM: {e}")
 
-        elif LLM_PROVIDER == "gemini" and GEMINI_API_KEY and GEMINI_API_KEY != "your-gemini-key-here":
-            async with httpx.AsyncClient(timeout=30.0) as client:
-                resp = await client.post(
-                    f"https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent",
-                    params={"key": GEMINI_API_KEY},
-                    json={"contents": [{"parts": [{"text": prompt}]}]},
-                )
-                data = resp.json()
-                content = data.get("candidates", [{}])[0].get("content", {}).get("parts", [{}])[0].get("text", "{}")
-                return parse_llm_response(content)
 
-        elif LLM_PROVIDER == "openai" and OPENAI_API_KEY and OPENAI_API_KEY != "sk-your-openai-key-here":
-            async with httpx.AsyncClient(timeout=30.0) as client:
-                resp = await client.post(
-                    "https://api.openai.com/v1/chat/completions",
-                    headers={"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"},
-                    json={"model": "gpt-3.5-turbo", "messages": [{"role": "user", "content": prompt}], "max_tokens": 1024},
-                )
-                data = resp.json()
-                content = data.get("choices", [{}])[0].get("message", {}).get("content", "{}")
-                return parse_llm_response(content)
+async def analyze_with_groq(transcript: str) -> dict:
+    """Call Groq API with real API key"""
+    if not GROQ_API_KEY:
+        raise ValueError("GROQ_API_KEY not configured")
+    
+    logger.info(f"Calling Groq API (llama-3.3-70b-versatile)...")
+    
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        response = await client.post(
+            "https://api.groq.com/openai/v1/chat/completions",
+            headers={
+                "Authorization": f"Bearer {GROQ_API_KEY}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": "llama-3.3-70b-versatile",
+                "messages": [
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user", "content": f"Analyze this loan application conversation:\n\n{transcript}"},
+                ],
+                "temperature": 0.1,  # Low temp for consistent structured output
+                "max_tokens": 2048,
+                "top_p": 1,
+            },
+        )
+    
+    if response.status_code != 200:
+        error_detail = response.text
+        logger.error(f"Groq API error {response.status_code}: {error_detail}")
+        raise ValueError(f"Groq API returned {response.status_code}: {error_detail}")
+    
+    data = response.json()
+    content = data["choices"][0]["message"]["content"]
+    
+    logger.info(f"Groq response received: {len(content)} chars")
+    logger.debug(f"Raw Groq response: {content[:500]}")
+    
+    parsed = parse_llm_json(content)
+    parsed["_model"] = data.get("model", "mixtral-8x7b-32768")
+    parsed["_provider"] = "groq"
+    parsed["_usage"] = data.get("usage", {})
+    
+    return parsed
 
-        elif LLM_PROVIDER == "ollama":
-            async with httpx.AsyncClient(timeout=60.0) as client:
-                resp = await client.post(
-                    f"{LOCAL_LLM_URL}/api/generate",
-                    json={"model": "mistral", "prompt": prompt, "stream": False},
-                )
-                data = resp.json()
-                return parse_llm_response(data.get("response", "{}"))
 
-        elif LLM_PROVIDER == "anthropic" and ANTHROPIC_API_KEY and ANTHROPIC_API_KEY != "sk-ant-your-key-here":
-            async with httpx.AsyncClient(timeout=30.0) as client:
-                resp = await client.post(
-                    "https://api.anthropic.com/v1/messages",
-                    headers={"x-api-key": ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01", "Content-Type": "application/json"},
-                    json={"model": "claude-3-haiku-20240307", "max_tokens": 1024, "messages": [{"role": "user", "content": prompt}]},
-                )
-                data = resp.json()
-                content = data.get("content", [{}])[0].get("text", "{}")
-                return parse_llm_response(content)
+async def analyze_with_openai(transcript: str) -> dict:
+    """Call OpenAI API"""
+    if not OPENAI_API_KEY:
+        raise ValueError("OPENAI_API_KEY not configured")
+    
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        response = await client.post(
+            "https://api.openai.com/v1/chat/completions",
+            headers={"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"},
+            json={
+                "model": "gpt-3.5-turbo",
+                "messages": [
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user", "content": f"Analyze this loan application conversation:\n\n{transcript}"},
+                ],
+                "temperature": 0.1,
+                "max_tokens": 2048,
+            },
+        )
 
-    except Exception as e:
-        logger.warning(f"LLM API call failed ({LLM_PROVIDER}): {e}, falling back to simulation")
+    if response.status_code != 200:
+        raise ValueError(f"OpenAI API error: {response.status_code}")
 
-    # Fallback to simulation
-    return simulate_analysis(transcript)
+    data = response.json()
+    content = data["choices"][0]["message"]["content"]
+    parsed = parse_llm_json(content)
+    parsed["_provider"] = "openai"
+    parsed["_model"] = data.get("model", "gpt-3.5-turbo")
+    return parsed
+
+
+async def analyze_with_gemini(transcript: str) -> dict:
+    """Call Google Gemini API"""
+    if not GEMINI_API_KEY:
+        raise ValueError("GEMINI_API_KEY not configured")
+    
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        response = await client.post(
+            "https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent",
+            params={"key": GEMINI_API_KEY},
+            json={"contents": [{"parts": [{"text": f"{SYSTEM_PROMPT}\n\nTranscript:\n{transcript}"}]}]},
+        )
+
+    if response.status_code != 200:
+        raise ValueError(f"Gemini API error: {response.status_code}")
+
+    data = response.json()
+    content = data["candidates"][0]["content"]["parts"][0]["text"]
+    parsed = parse_llm_json(content)
+    parsed["_provider"] = "gemini"
+    return parsed
+
+
+async def analyze_with_anthropic(transcript: str) -> dict:
+    """Call Anthropic Claude API"""
+    if not ANTHROPIC_API_KEY:
+        raise ValueError("ANTHROPIC_API_KEY not configured")
+    
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        response = await client.post(
+            "https://api.anthropic.com/v1/messages",
+            headers={"x-api-key": ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01", "Content-Type": "application/json"},
+            json={
+                "model": "claude-3-haiku-20240307",
+                "system": SYSTEM_PROMPT,
+                "max_tokens": 2048,
+                "messages": [{"role": "user", "content": f"Analyze this loan application conversation:\n\n{transcript}"}],
+            },
+        )
+
+    if response.status_code != 200:
+        raise ValueError(f"Anthropic API error: {response.status_code}")
+
+    data = response.json()
+    content = data["content"][0]["text"]
+    parsed = parse_llm_json(content)
+    parsed["_provider"] = "anthropic"
+    return parsed
+
+
+async def analyze_with_ollama(transcript: str) -> dict:
+    """Call local Ollama"""
+    async with httpx.AsyncClient(timeout=120.0) as client:
+        response = await client.post(
+            f"{LOCAL_LLM_URL}/api/generate",
+            json={
+                "model": "mistral",
+                "prompt": f"{SYSTEM_PROMPT}\n\nTranscript:\n{transcript}",
+                "stream": False,
+            },
+        )
+
+    data = response.json()
+    parsed = parse_llm_json(data.get("response", "{}"))
+    parsed["_provider"] = "ollama"
+    return parsed
+
+
+# Provider mapping
+LLM_PROVIDERS = {
+    "groq": analyze_with_groq,
+    "openai": analyze_with_openai,
+    "gemini": analyze_with_gemini,
+    "anthropic": analyze_with_anthropic,
+    "ollama": analyze_with_ollama,
+}
 
 
 @app.post("/analyze", response_model=LLMAnalysisResponse)
 async def analyze_conversation(request: LLMAnalysisRequest):
-    """Analyze conversation using LLM or simulation"""
+    """Analyze conversation using configured LLM provider (real API calls)"""
     try:
-        logger.info(f"Analyzing conversation for session {request.session_id} using {LLM_PROVIDER}")
+        logger.info(f"[Session {request.session_id}] Analyzing via {LLM_PROVIDER}...")
         
-        result = await call_llm(request.transcript)
+        if LLM_PROVIDER not in LLM_PROVIDERS:
+            raise HTTPException(status_code=500, detail=f"Unknown LLM provider: {LLM_PROVIDER}. Supported: {list(LLM_PROVIDERS.keys())}")
+        
+        analyze_fn = LLM_PROVIDERS[LLM_PROVIDER]
+        result = await analyze_fn(request.transcript)
+        
+        logger.info(f"[Session {request.session_id}] LLM classification: {result.get('classification')} (confidence: {result.get('confidence')})")
         
         return LLMAnalysisResponse(
             customer_classification=result.get("classification", "medium"),
-            risk_indicators=result.get("risks", result.get("red_flags", [])),
+            risk_indicators=result.get("risks", []) + result.get("red_flags", []),
             confidence=float(result.get("confidence", 0.5)),
             structured_insights={
-                "llm_provider": LLM_PROVIDER,
+                "llm_provider": result.get("_provider", LLM_PROVIDER),
+                "model": result.get("_model", "unknown"),
+                "usage": result.get("_usage", {}),
                 "customer_persona": result.get("customer_persona", ""),
                 "extracted_data": result.get("extracted_data", {}),
                 "sentiment": result.get("sentiment", "neutral"),
                 "recommendation": result.get("recommendation", ""),
-                "analysis_complete": True,
+                "income_stability": result.get("income_stability", "unknown"),
+                "repayment_capacity": result.get("repayment_capacity", "unknown"),
             },
         )
+    except ValueError as e:
+        logger.error(f"LLM parsing error: {e}")
+        raise HTTPException(status_code=502, detail=f"LLM response parsing failed: {str(e)}")
+    except httpx.TimeoutException:
+        logger.error("LLM API timeout")
+        raise HTTPException(status_code=504, detail="LLM API call timed out")
     except Exception as e:
-        logger.error(f"LLM analysis error: {e}")
+        logger.error(f"LLM analysis error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"LLM analysis failed: {str(e)}")
 
 
 @app.get("/health")
 async def health():
-    has_key = bool(
-        (LLM_PROVIDER == "groq" and GROQ_API_KEY and GROQ_API_KEY != "gsk_your-groq-key-here")
-        or (LLM_PROVIDER == "ollama")
-        or (LLM_PROVIDER == "openai" and OPENAI_API_KEY)
-        or (LLM_PROVIDER == "gemini" and GEMINI_API_KEY)
-        or (LLM_PROVIDER == "anthropic" and ANTHROPIC_API_KEY)
-    )
+    provider_key = {
+        "groq": bool(GROQ_API_KEY),
+        "openai": bool(OPENAI_API_KEY),
+        "gemini": bool(GEMINI_API_KEY),
+        "anthropic": bool(ANTHROPIC_API_KEY),
+        "ollama": True,
+    }
     return {
-        "status": "LLM Service is running",
-        "provider": LLM_PROVIDER,
-        "configured": has_key,
-        "mode": "api" if has_key else "simulation",
+        "status": "LLM Service running",
+        "active_provider": LLM_PROVIDER,
+        "api_key_configured": provider_key.get(LLM_PROVIDER, False),
+        "available_providers": [k for k, v in provider_key.items() if v],
     }
 
 
