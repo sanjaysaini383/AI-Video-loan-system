@@ -7,6 +7,7 @@ import axios from 'axios';
 import jwt from 'jsonwebtoken';
 import crypto from 'crypto';
 import { createClient } from 'redis';
+import * as db from './db';
 
 dotenv.config({ path: '../../.env' });
 
@@ -50,6 +51,9 @@ const initRedis = async () => {
     console.warn('⚠️  Redis unavailable:', e.message);
     redisClient = null;
   }
+
+  // Initialize Prisma (PostgreSQL)
+  await db.initPrisma();
 };
 initRedis();
 
@@ -197,12 +201,15 @@ app.post('/api/auth/register', authLimiter, async (req: Request, res: Response) 
 
   const userId = `user_${crypto.randomBytes(12).toString('hex')}`;
 
-  // Store user in Redis
+  // Store user in Redis (cache)
   const userData = { id: userId, phoneNumber, firstName, lastName: lastName || '', createdAt: new Date().toISOString() };
   if (redisClient) {
     await redisClient.set(`user:${userId}`, JSON.stringify(userData), { EX: 86400 * 30 });
     await redisClient.set(`phone:${phoneNumber}`, userId, { EX: 86400 * 30 });
   }
+
+  // Persist user to PostgreSQL
+  await db.createUser({ id: userId, phoneNumber, firstName, lastName });
 
   const token = jwt.sign(
     { id: userId, phoneNumber, firstName, lastName: lastName || '', role: 'customer' },
@@ -227,12 +234,26 @@ app.post('/api/auth/login', authLimiter, async (req: Request, res: Response) => 
   let userId: string | null = null;
   let userData: any = null;
 
-  // Look up user by phone
+  // Look up user by phone — try Redis cache first, then PostgreSQL
   if (redisClient) {
     userId = await redisClient.get(`phone:${phoneNumber}`);
     if (userId) {
       const raw = await redisClient.get(`user:${userId}`);
       if (raw) userData = JSON.parse(raw);
+    }
+  }
+
+  // Fallback to PostgreSQL if not in Redis
+  if (!userId || !userData) {
+    const dbUser = await db.getUserByPhone(phoneNumber);
+    if (dbUser) {
+      userId = dbUser.id;
+      userData = dbUser;
+      // Re-cache in Redis
+      if (redisClient) {
+        await redisClient.set(`user:${userId}`, JSON.stringify(userData), { EX: 86400 * 30 });
+        await redisClient.set(`phone:${phoneNumber}`, userId, { EX: 86400 * 30 });
+      }
     }
   }
 
@@ -309,13 +330,34 @@ app.post('/api/sessions', authenticate, async (req: Request, res: Response) => {
     deviceInfo: { userAgent: req.headers['user-agent'], ip: req.ip, platform: req.body.platform || 'web' },
   };
 
-  // Store session in Redis
+  // Store session in Redis (cache for real-time access)
   if (redisClient) {
     await redisClient.set(`session:${sessionId}`, JSON.stringify(sessionData), { EX: 86400 });
-    // Track user sessions
     await redisClient.lPush(`user-sessions:${user.id}`, sessionId);
     await redisClient.expire(`user-sessions:${user.id}`, 86400 * 7);
   }
+
+  // Persist session to PostgreSQL
+  await db.createSession({
+    id: sessionId,
+    userId: user.id,
+    latitude: req.body.location?.latitude,
+    longitude: req.body.location?.longitude,
+    userAgent: req.headers['user-agent'] as string,
+    ipAddress: req.ip,
+    platform: req.body.platform || 'web',
+  });
+
+  // Update user with employment/income data
+  await db.createUser({
+    id: user.id,
+    phoneNumber: user.phoneNumber,
+    firstName: user.firstName,
+    lastName: user.lastName,
+    employmentStatus: req.body.employmentStatus,
+    monthlyIncome: parseFloat(req.body.monthlyIncome) || undefined,
+    loanPurpose: req.body.loanPurpose,
+  });
 
   // Forward to session service
   const result = await proxyRequest(SERVICES.session, '/sessions', 'POST', sessionData);
@@ -616,14 +658,29 @@ app.post('/api/sessions/:id/process', authenticate, async (req: Request, res: Re
   pipeline.completedAt = new Date().toISOString();
   pipeline.duration = `${Date.now() - new Date(pipeline.startedAt).getTime()}ms`;
 
-  // Store full pipeline result in Redis
+  // Store full pipeline result in Redis (cache)
   if (redisClient) {
     await redisClient.set(`pipeline:${sessionId}`, JSON.stringify(pipeline), { EX: 86400 * 7 });
+  }
+
+  // Persist pipeline results to PostgreSQL
+  await db.updateSession(sessionId, {
+    transcript: transcript || null,
+    llmResult: pipeline.stages.llm?.data || null,
+    riskResult: pipeline.stages.risk?.data || null,
+    pipelineResult: pipeline,
+  });
+
+  // Persist offers to PostgreSQL
+  const generatedOffers = pipeline.stages.offer?.data?.offers || [];
+  if (generatedOffers.length > 0) {
+    await db.saveOffers(generatedOffers, sessionId, user.id);
   }
 
   logAudit(sessionId, user.id, 'PIPELINE_COMPLETED', {
     stageResults: Object.fromEntries(Object.entries(pipeline.stages).map(([k, v]: any) => [k, v.status])),
     duration: pipeline.duration,
+    offersGenerated: generatedOffers.length,
   }, 'api-gateway');
 
   res.json(pipeline);
@@ -640,7 +697,14 @@ app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
 app.listen(PORT, () => {
   console.log(`🚀 API Gateway running on port ${PORT}`);
   console.log(`🔐 JWT: ${JWT_SECRET ? 'configured' : 'MISSING!'}`);
+  console.log(`🗄️  PostgreSQL: ${process.env.DATABASE_URL ? 'configured' : 'not configured (Prisma disabled)'}`);
   console.log(`📡 Services:`, Object.entries(SERVICES).map(([k, v]) => `${k}→${v}`).join(' | '));
+});
+
+// Graceful shutdown
+process.on('SIGTERM', async () => {
+  await db.disconnectPrisma();
+  process.exit(0);
 });
 
 export default app;
