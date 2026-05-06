@@ -4,7 +4,7 @@ let prisma: PrismaClient | null = null;
 
 export async function initPrisma(): Promise<PrismaClient | null> {
   if (!process.env.DATABASE_URL) {
-    console.warn('⚠️  DATABASE_URL not set — PostgreSQL/Prisma disabled');
+    console.warn('⚠️  DATABASE_URL not set — PostgreSQL disabled');
     return null;
   }
 
@@ -79,7 +79,10 @@ export async function getUserById(id: string) {
   try {
     return await prisma.user.findUnique({
       where: { id },
-      include: { sessions: { orderBy: { createdAt: 'desc' }, take: 10 }, offers: { orderBy: { createdAt: 'desc' }, take: 20 } },
+      include: {
+        sessions: { orderBy: { createdAt: 'desc' }, take: 10 },
+        offers: { orderBy: { createdAt: 'desc' }, take: 20 },
+      },
     });
   } catch {
     return null;
