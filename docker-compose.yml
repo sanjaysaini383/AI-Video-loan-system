@@ -1,12 +1,14 @@
 services:
   # Databases
+  # PostgreSQL Database
+  # ⚠️  Change POSTGRES_PASSWORD in .env before production!
   postgres:
     image: postgres:15-alpine
     container_name: video-loan-postgres
     environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: password
-      POSTGRES_DB: video_loan_db
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change_me_in_production}
+      POSTGRES_DB: ${POSTGRES_DB:-video_loan_db}
     ports:
       - "5432:5432"
     volumes:
@@ -17,12 +19,14 @@ services:
       timeout: 5s
       retries: 5
 
+  # MongoDB Database
+  # ⚠️  Change MONGODB_PASSWORD in .env before production!
   mongo:
     image: mongo:7.0
     container_name: video-loan-mongo
     environment:
-      MONGO_INITDB_ROOT_USERNAME: admin
-      MONGO_INITDB_ROOT_PASSWORD: password
+      MONGO_INITDB_ROOT_USERNAME: ${MONGODB_USER:-admin}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGODB_PASSWORD:-change_me_in_production}
     ports:
       - "27017:27017"
     volumes:
@@ -55,8 +59,8 @@ services:
     container_name: video-loan-api-gateway
     environment:
       NODE_ENV: development
-      DATABASE_URL: postgresql://postgres:password@postgres:5432/video_loan_db
-      MONGODB_URI: mongodb://admin:password@mongo:27017/video_loan_system
+      DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-change_me_in_production}@postgres:5432/${POSTGRES_DB:-video_loan_db}
+      MONGODB_URI: mongodb://${MONGODB_USER:-admin}:${MONGODB_PASSWORD:-change_me_in_production}@mongo:27017/video_loan_system
       REDIS_URL: redis://redis:6379
       API_GATEWAY_PORT: 3000
       JWT_SECRET: ${JWT_SECRET}
@@ -135,7 +139,7 @@ services:
     container_name: video-loan-kyc-service
     environment:
       NODE_ENV: development
-      DATABASE_URL: postgresql://postgres:password@postgres:5432/video_loan_db
+      DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-change_me_in_production}@postgres:5432/${POSTGRES_DB:-video_loan_db}
       REDIS_URL: redis://redis:6379
       KYC_SERVICE_PORT: 3004
     ports:
@@ -156,7 +160,7 @@ services:
     container_name: video-loan-risk-service
     environment:
       PYTHONUNBUFFERED: 1
-      DATABASE_URL: postgresql://postgres:password@postgres:5432/video_loan_db
+      DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-change_me_in_production}@postgres:5432/${POSTGRES_DB:-video_loan_db}
       REDIS_URL: redis://redis:6379
       RISK_SERVICE_PORT: 3005
     ports:

@@ -78,3 +78,65 @@ Copy `.env.example` to `.env`. Required keys:
 - **Backend (Node.js)**: Express, Socket.io, Redis, Bull
 - **Backend (Python)**: FastAPI, MediaPipe, OpenCV
 - **Infrastructure**: Docker Compose, PostgreSQL, MongoDB, Redis
+
+## Documentation
+
+- 📚 **[Setup Guide](SETUP.md)** — Local development setup
+- 🏗️ **[Architecture](ARCHITECTURE.md)** — System design & data flow
+- 📖 **[API Documentation](API.md)** — Complete API reference
+- 🤝 **[Contributing Guidelines](CONTRIBUTING.md)** — How to contribute
+- 🔐 **[Security Policy](SECURITY.md)** — Security guidelines & reporting
+- 📋 **[Code of Conduct](CODE_OF_CONDUCT.md)** — Community standards
+- 📝 **[Changelog](CHANGELOG.md)** — Release notes & version history
+
+## Getting Started
+
+### Quickest Path (5 minutes)
+```bash
+# Clone & setup
+git clone https://github.com/sanjaysaini383/AI-Video-loan-system.git
+cd AI-Video-loan-system
+cp .env.example .env
+
+# Get API keys (free)
+# - GROQ_API_KEY: https://console.groq.com
+# - JWT_SECRET: node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+
+# Edit .env, then start
+npm install
+docker-compose up -d
+cd frontend && npm run dev
+```
+
+Open http://localhost:5173 in your browser.
+
+### Full Documentation
+See **[SETUP.md](SETUP.md)** for detailed setup instructions.
+
+## Contributing
+
+We welcome contributions! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for:
+- How to set up your development environment
+- Commit guidelines and branch naming conventions
+- Pull request process
+- Coding standards
+- Testing requirements
+
+### Quick Contribution Steps
+1. Fork the repository
+2. Create a feature branch: `git checkout -b feature/your-feature`
+3. Make changes & test locally
+4. Commit with descriptive messages: `git commit -m "feat: add your feature"`
+5. Push and create a Pull Request
+
+**Not sure where to start?** Check [open issues](https://github.com/sanjaysaini383/AI-Video-loan-system/issues) marked with `good-first-issue` or `help-wanted`.
+
+## Security
+
+Please see [SECURITY.md](SECURITY.md) for:
+- Security guidelines for users and contributors
+- How to report vulnerabilities
+- Built-in security features
+- Best practices
+
+⚠️ **Do NOT commit secrets!** Use `.env.example` as a template.
