@@ -1,37 +1,178 @@
-# 🎥 LoanVision AI — Video-Based Digital Loan Origination System
+# 🎥 Video-Based Digital Loan Origination System
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Node.js](https://img.shields.io/badge/Node.js-18+-green)](https://nodejs.org/)
-[![Python](https://img.shields.io/badge/Python-3.9+-blue)](https://www.python.org/)
-[![Docker](https://img.shields.io/badge/Docker-Ready-blue?logo=docker)](https://www.docker.com/)
-[![TypeScript](https://img.shields.io/badge/TypeScript-Ready-blue?logo=typescript)](https://www.typescriptlang.org/)
-[![Open Source](https://img.shields.io/badge/Open-Source-brightgreen)](LICENSE)
+An AI-powered platform for end-to-end digital loan onboarding through live video calls with real-time risk assessment, KYC verification, and instant offer generation.
 
-> **Revolutionize loan origination with AI-powered video KYC, real-time risk assessment, and instant offers.**
+## ⚡ Quick Start
 
-A production-ready, secure platform that automates the entire loan application process through live video calls, incorporating modern AI/ML technologies for identity verification, fraud detection, and intelligent credit scoring.
+### 1. Prerequisites
+- Docker Desktop
+- 5GB+ free space
+- Git
 
-**✨ Key Highlights:**
-- 🎬 **Live Video KYC** with AI-powered face detection and liveness verification
-- 🤖 **AI Conversation Analysis** using Groq/Gemini LLMs
-- 📊 **Real-time Risk Scoring** with fraud detection
-- ⚡ **Instant Loan Offers** with EMI calculations
-- 🔐 **Bank-grade Security** with JWT auth and audit trails
-- 🏗️ **Microservices Architecture** for scalability
-- 🐳 **Docker-ready** for easy deployment
+### 2. Setup
+```bash
+git clone https://github.com/sanjaysaini383/AI-Video-loan-system.git
+cd AI-Video-loan-system
 
-## 📋 Table of Contents
+# Configure environment
+notepad .env
 
-- [Overview](#-loanvision-ai--video-based-digital-loan-origination-system)
-- [Features](#-key-features)
-- [Quick Start](#-quick-start)
-- [Architecture](#-architecture)
-- [Tech Stack](#-tech-stack)
-- [Documentation](#-documentation)
-- [Contributing](#-contributing)
-- [Security](#-security)
-- [FAQ](#-faq)
-- [Support](#-support)
+# Required keys:
+# - DATABASE_URL (PostgreSQL)
+# - GROQ_API_KEY (LLM)
+# - DEEPGRAM_API_KEY (STT)
+# - JWT_SECRET
+```
+
+### 3. Start Services
+```bash
+docker-compose down -v
+docker-compose up -d --build
+# Wait 5-10 minutes for first build
+```
+
+### 4. Verify
+```bash
+docker-compose ps
+curl http://localhost:3000/health
+curl http://localhost:3007/health
+```
+
+### 5. Access Frontend
+```bash
+cd frontend
+npm install
+npm run dev
+# Open http://localhost:5173
+```
+
+---
+
+## 🏗️ Architecture
+
+### 10 Microservices
+
+| Port | Service | Purpose |
+|------|---------|---------|
+| 3000 | API Gateway | Main entry point & authentication |
+| 3001 | Session Service | WebRTC signaling |
+| 3002 | Media Service | Video/audio streaming |
+| 3003 | STT Service | Speech-to-text (Deepgram) |
+| 3004 | KYC Service | Identity verification |
+| 3005 | Risk Service | Risk & fraud scoring |
+| 3006 | Vision Service | Age estimation (MediaPipe) |
+| 3007 | LLM Service | Conversation analysis (Groq) |
+| 3008 | Offer Service | Loan offer generation |
+| 3009 | Audit Service | Compliance logging |
+
+### 3 Databases
+
+- **PostgreSQL (5432)** - User data, KYC, offers
+- **MongoDB (27017)** - Transcripts, audit logs
+- **Redis (6379)** - Session cache, queues
+
+---
+
+## 🔄 Loan Onboarding Flow
+
+```
+Customer Video Call
+       ↓
+WebRTC Session (Session Service)
+       ↓
+Video/Audio Capture (Media Service)
+       ↓
+Parallel:
+  ├→ STT Transcription
+  ├→ Age Estimation (Vision)
+  └→ Risk Assessment
+       ↓
+LLM Analysis (Conversation Intelligence)
+       ↓
+KYC Verification
+       ↓
+Loan Offer Generation
+       ↓
+Compliance Audit Logging
+```
+
+---
+
+## 📡 Key Features
+
+✅ **Live Video KYC** - WebRTC-based real-time onboarding  
+✅ **AI Age Estimation** - MediaPipe for facial analysis  
+✅ **Speech-to-Text** - Deepgram API for transcription  
+✅ **LLM Intelligence** - Groq/OpenAI/Ollama for intent analysis  
+✅ **Risk Scoring** - ML-based fraud & propensity detection  
+✅ **Instant Offers** - Personalized loan terms in seconds  
+✅ **Audit Trail** - Complete compliance logging  
+✅ **Scalable** - Microservices architecture  
+
+---
+
+## 🔧 Configuration
+
+```bash
+# .env file example
+DATABASE_URL=postgresql://user:pass@host/db
+LLM_PROVIDER=groq
+GROQ_API_KEY=xxx
+DEEPGRAM_API_KEY=xxx
+JWT_SECRET=64_char_hex_string
+MONGODB_URI=mongodb://admin:pass@localhost:27017/db
+REDIS_URL=redis://localhost:6379
+```
+
+---
+
+## 📊 Test All Services
+
+```powershell
+@("3000","3001","3002","3003","3004","3005","3006","3007","3008","3009") | ForEach-Object {
+  Write-Host "Testing port $_..."
+  curl "http://localhost:$_/health"
+}
+```
+
+---
+
+## 🛠️ Common Commands
+
+```bash
+# View logs
+docker-compose logs -f api-gateway
+
+# Stop all
+docker-compose down
+
+# Clean everything
+docker-compose down -v
+
+# Rebuild service
+docker-compose build --no-cache api-gateway
+```
+
+---
+
+## 📚 Documentation
+
+- **[ARCHITECTURE.md](ARCHITECTURE.md)** - System design
+- **[API.md](API.md)** - API endpoints
+- **[docker-compose.yml](docker-compose.yml)** - Service config
+
+---
+
+## ✅ Status
+
+- API Gateway: ✅ Working
+- LLM Service: ✅ Working  
+- Vision Service: ✅ Working
+- All 10 Services: ✅ Running
+
+---
+
+**Last Updated:** May 2026 | Production Ready ✅
 
 ---
 
